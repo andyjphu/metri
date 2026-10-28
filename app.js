@@ -25,6 +25,13 @@
     return [...counts].map(([name, count]) => count > 1 ? `${name} ×${count}` : name).join(", ");
   }
 
+  function currentInputItems(input) {
+    let start = input.length;
+    if (input[start - 1]?.role === "user") start--;
+    while (start > 0 && input[start - 1]?.type === "function_call_output") start--;
+    return input.slice(start);
+  }
+
   function description(entry) {
     try {
       const obj = JSON.parse(entry.current_text);
@@ -33,11 +40,12 @@
         return calls.length ? `Tool call${calls.length > 1 ? "s" : ""} · ${toolNames(calls.map((x) => x.name))}` : "Agent response";
       }
       const input = obj.input || [];
-      const outputs = [];
-      for (let i = input.length - 1; input[i]?.type === "function_call_output"; i--) outputs.unshift(input[i]);
+      const current = currentInputItems(input);
+      const outputs = current.filter((x) => x.type === "function_call_output");
       if (!outputs.length) return "Request";
       const names = new Map(input.filter((x) => x.type === "function_call").map((x) => [x.call_id, x.name]));
-      return `Tool response${outputs.length > 1 ? "s" : ""} · ${toolNames(outputs.map((x) => names.get(x.call_id) || "tool"))}`;
+      const message = current.some((x) => x.role === "user") ? " + user message" : "";
+      return `Tool response${outputs.length > 1 ? "s" : ""} · ${toolNames(outputs.map((x) => names.get(x.call_id) || "tool"))}${message}`;
     } catch { return "Edited JSON"; }
   }
 
@@ -60,9 +68,7 @@
     try { value = JSON.parse(edits.get(entry.id) ?? entry.current_text); }
     catch { return {text: "", tool: false}; }
     const input = value.input || [];
-    let start = input.length - 1;
-    while (start > 0 && input[start]?.type === "function_call_output" && input[start - 1]?.type === "function_call_output") start--;
-    const items = entry.side === "gray" ? value.output || [] : input.slice(start);
+    const items = entry.side === "gray" ? value.output || [] : currentInputItems(input);
     const text = items.flatMap((item) => {
       if (item.type === "function_call") return [`${item.name}(${item.arguments || ""})`];
       if (item.type === "function_call_output") return [toolResultText(item.output)];
@@ -85,9 +91,8 @@
     const items = value[key] || [];
     let indices = items.map((_, index) => index);
     if (entry.side === "blue") {
-      let start = items.length;
-      while (start > 0 && items[start - 1]?.type === "function_call_output") start--;
-      indices = start < items.length ? indices.slice(start) : [items.findLastIndex((item) => item.role === "user")];
+      const start = items.length - currentInputItems(items).length;
+      indices = indices.slice(start);
     }
     const names = new Map((value.input || []).filter((item) => item.type === "function_call")
       .map((item) => [item.call_id, item.name]));
