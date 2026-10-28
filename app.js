@@ -128,15 +128,17 @@
   }
 
   function updateSaveStatus() {
-    const last = state?.entries.at(-1);
-    const status = state?.busy ? "Approved request is being sent." :
-      saveError ? "Local save failed. Changes have not been sent." :
-      saving.size ? "Saving edits locally. Changes have not been sent." :
-      edits.size ? "Unsaved edits in this browser. Changes have not been sent." :
-      state?.error ? "Last send failed. Review the error below." :
-      last?.status === "stale" ? "Gray edits saved locally. Refresh the blue draft." :
-      last?.side === "blue" && last.status === "draft" ? "All edits saved locally. Draft has not been sent." :
-      "All edits saved locally.";
+    const elapsed = Math.max(0, Math.floor((Date.now() - Date.parse(state?.saved_at)) / 1000));
+    const age = elapsed < 60 ? `${Math.floor(elapsed / 5) * 5}s` :
+      elapsed < 3600 ? `${Math.floor(elapsed / 60)}min` :
+      elapsed < 86400 ? `${Math.floor(elapsed / 3600)}h` :
+      `${Math.floor(elapsed / 86400)}d`;
+    const status = state?.busy ? "Sending..." :
+      saveError ? "Save failed" :
+      saving.size ? "Saving..." :
+      edits.size ? "Unsaved edits" :
+      state?.error ? "Send failed" :
+      Number.isFinite(elapsed) ? `Saved ${age} ago` : "Saved locally";
     $("#save-status").textContent = status;
   }
 
@@ -150,7 +152,7 @@
     }
     const model = typeof request?.model === "string" ? request.model : "";
     const program = typeof request?.access_programs?.cyber === "string" ? request.access_programs.cyber : "";
-    $("#model-name").textContent = [model, program].filter(Boolean).join(" · ");
+    $("#model-name").textContent = [model, program && `${program}: enabled`].filter(Boolean).join(" · ");
   }
 
   function isEditable(entry) {
@@ -178,9 +180,6 @@
     showNotice(state.error || "", !!state.error);
     updateSaveStatus();
     updateModelName();
-    $("#jump").innerHTML = `<option value="">Go to message</option>` + entries.map((entry, index) =>
-      `<option value="${entry.id}">#${index + 1} ${escapeHtml(description(entry))}</option>`).join("");
-    $("#jump").value = selected || "";
     $("#stream").innerHTML = entries.map((entry, index) => {
       const editable = isEditable(entry);
       const editing = editable && viewMode === "rendered" && renderedEditors.has(entry.id);
@@ -256,7 +255,6 @@
   function jump(id) {
     selected = Number(id) || null;
     $("#stream").querySelectorAll(".message").forEach((el) => el.classList.toggle("selected", Number(el.dataset.id) === selected));
-    $("#jump").value = selected || "";
     if (selected) {
       location.hash = `m-${selected}`;
       $(`#m-${selected}`)?.scrollIntoView({behavior: "smooth", block: "center"});
@@ -416,7 +414,6 @@
     if (!btn) return;
     action(btn.dataset.action, Number(btn.closest(".message")?.dataset.id || state.entries.at(-1).id));
   });
-  $("#jump").addEventListener("change", (event) => jump(event.target.value));
   $("#view-mode").addEventListener("click", (event) => {
     const choice = event.target.closest("[data-view]");
     if (!choice || choice.dataset.view === viewMode) return;
@@ -437,4 +434,5 @@
     if (fromHash) jump(fromHash);
   });
   setInterval(() => refresh(), 1100);
+  setInterval(updateSaveStatus, 1000);
 })();

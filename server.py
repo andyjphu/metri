@@ -345,7 +345,9 @@ class Handler(BaseHTTPRequestHandler):
         path = urlparse(self.path).path
         if path == "/api/state":
             with LOCK:
-                self.send(200, load_state())
+                state = load_state()
+                saved_at = datetime.fromtimestamp(STATE_FILE.stat().st_mtime, timezone.utc).isoformat()
+                self.send(200, {**state, "saved_at": saved_at})
             return
         if path == "/api/events":
             records = [json.loads(line) for line in EVENTS_FILE.read_text().splitlines()] if EVENTS_FILE.exists() else []
