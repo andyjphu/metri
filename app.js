@@ -8,12 +8,23 @@
   let saving = new Map();
   let lastSignature = "";
   let viewMode = "raw";
+  let collapseAll = false;
+  const collapseOverrides = new Map();
+  const previewCache = new Map();
+  let previewFrame = null;
   let saveError = false;
+  let traces = null;
+  let switchingTrace = false;
   const renderedEditors = new Set();
   const pencil = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4l11.1-11.1a2.1 2.1 0 0 0-3-3L5 17v3Z"/><path d="m14.7 7.3 3 3"/></svg>';
   const rewindIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 7-4 4 4 4"/><path d="M5 11h10a5 5 0 0 1 0 10h-2"/></svg>';
   const refreshIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.4 6.6"/><path d="M20 5v6h-6"/></svg>';
   const approveIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 4.5 4.5L19 7"/></svg>';
+  const collapseIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>';
+
+  function isCollapsed(entry) {
+    return collapseOverrides.get(entry.id) ?? collapseAll;
+  }
 
   function label(entry) {
     return entry.side === "gray" ? "Agent" : "Request";
@@ -63,23 +74,60 @@
     ).join("\n");
   }
 
-  function messageContent(entry) {
+  function previewParts(entry) {
     let value;
     try { value = JSON.parse(edits.get(entry.id) ?? entry.current_text); }
-    catch { return {text: "", tool: false}; }
+    catch { return []; }
     const input = value.input || [];
     const items = entry.side === "gray" ? value.output || [] : currentInputItems(input);
-    const text = items.flatMap((item) => {
-      if (item.type === "function_call") return [`${item.name}(${item.arguments || ""})`];
-      if (item.type === "function_call_output") return [toolResultText(item.output)];
+    const names = new Map(input.filter((item) => item.type === "function_call")
+      .map((item) => [item.call_id, item.name]));
+    return items.flatMap((item) => {
+      if (item.type === "function_call") return [{label: `${item.name || "Tool"} arguments`, text: item.arguments || "", tool: true}];
+      if (item.type === "function_call_output") return [{label: `${names.get(item.call_id) || "Tool"} result`, text: toolResultText(item.output), tool: true}];
       const content = item.content;
-      if (typeof content === "string") return [content];
+      if (typeof content === "string") return [{label: "Message", text: content, tool: false}];
       if (Array.isArray(content)) return content.filter((part) =>
         part.type === "input_text" || part.type === "output_text" || part.type === "text"
-      ).map((part) => part.text || "");
+      ).map((part) => ({label: "Message", text: part.text || "", tool: false}));
       return [];
-    }).join("\n\n");
-    return {text, tool: items.some((item) => item.type === "function_call" || item.type === "function_call_output")};
+    });
+  }
+
+  function messageContent(entry) {
+    const parts = previewParts(entry);
+    return {text: parts.map((part) => part.tool ? `${part.label}: ${part.text}` : part.text).join("\n\n"),
+      tool: parts.some((part) => part.tool)};
+  }
+
+  function summaryText(entry) {
+    const cached = previewCache.get(entry.id);
+    if (cached?.revision === entry.revision && !edits.has(entry.id)) return cached.text;
+    const text = messageContent(entry).text.replace(/\s+/g, " ").trim().slice(0, 500) || description(entry);
+    if (!edits.has(entry.id)) previewCache.set(entry.id, {revision: entry.revision, text});
+    return text;
+  }
+
+  function queueVisiblePreviews() {
+    if (previewFrame) return;
+    previewFrame = requestAnimationFrame(() => {
+      previewFrame = null;
+      const scroller = $("#stream");
+      const viewport = scroller.getBoundingClientRect();
+      let filled = 0;
+      let more = false;
+      for (const article of scroller.querySelectorAll(".message.collapsed[data-id]")) {
+        const box = article.getBoundingClientRect();
+        if (box.bottom < viewport.top || box.top > viewport.bottom) continue;
+        const entry = state.entries.find((item) => item.id === Number(article.dataset.id));
+        if (!entry || article.dataset.previewRevision === String(entry.revision)) continue;
+        if (filled >= 4) { more = true; continue; }
+        article.querySelector(".collapsed-preview").textContent = summaryText(entry);
+        article.dataset.previewRevision = String(entry.revision);
+        filled++;
+      }
+      if (more) queueVisiblePreviews();
+    });
   }
 
   function editableParts(entry) {
@@ -111,9 +159,25 @@
   }
 
   function showPreview(el, entry) {
-    const content = messageContent(entry);
-    el.classList.toggle("tool-output", content.tool);
-    el.textContent = content.text;
+    const parts = previewParts(entry);
+    const sections = parts.length > 1 || parts.some((part) => part.tool);
+    el.classList.toggle("tool-output", sections);
+    if (!sections) {
+      el.textContent = parts[0]?.text || "";
+      return;
+    }
+    el.replaceChildren(...parts.map((part) => {
+      const section = document.createElement("div");
+      section.className = "message-section";
+      const label = document.createElement("div");
+      label.className = "message-section-label";
+      label.textContent = part.label;
+      const body = document.createElement("div");
+      body.className = `message-section-body ${part.tool ? "tool" : ""}`;
+      body.textContent = part.text;
+      section.append(label, body);
+      return section;
+    }));
   }
 
   async function api(path, body) {
@@ -147,7 +211,7 @@
     $("#save-status").textContent = status;
   }
 
-  function updateModelName() {
+  function updateStatusIndicators() {
     const blue = [...(state?.entries || [])].reverse().find((entry) => entry.side === "blue");
     let request;
     try { request = JSON.parse(edits.get(blue?.id) ?? blue?.current_text); }
@@ -157,7 +221,60 @@
     }
     const model = typeof request?.model === "string" ? request.model : "";
     const program = typeof request?.access_programs?.cyber === "string" ? request.access_programs.cyber : "";
-    $("#model-name").textContent = [model, program && `${program}: enabled`].filter(Boolean).join(" ");
+    $("#status-model").textContent = model;
+    $("#status-program").textContent = program ? `${program}: enabled` : "";
+    $("#status-program").hidden = !program;
+  }
+
+  async function loadTraces() {
+    const response = await fetch("/api/traces", {cache: "no-store"});
+    if (!response.ok) throw Error("Could not load traces.");
+    traces = await response.json();
+    const selector = $("#trace-select");
+    selector.replaceChildren(...traces.traces.map((trace) => {
+      const option = document.createElement("option");
+      option.value = trace.id;
+      option.textContent = trace.name;
+      return option;
+    }));
+    selector.value = traces.active;
+  }
+
+  async function finishEdits() {
+    for (const id of [...edits.keys()]) await saveEdit(id);
+    await Promise.all([...saving.values()]);
+    if (edits.size || saveError) throw Error("Finish saving edits before switching traces.");
+  }
+
+  async function selectTrace(id) {
+    if (!traces || id === traces.active || switchingTrace) return;
+    switchingTrace = true;
+    const selector = $("#trace-select");
+    selector.disabled = true;
+    try {
+      await finishEdits();
+      await api("/api/select-trace", {id});
+      timers.forEach(clearTimeout);
+      timers.clear();
+      edits.clear();
+      saving.clear();
+      renderedEditors.clear();
+      collapseOverrides.clear();
+      previewCache.clear();
+      selected = null;
+      lastSignature = "";
+      history.replaceState(null, "", location.pathname);
+      await loadTraces();
+      await refresh(true);
+      $("#stream").scrollTop = 0;
+      showNotice("");
+    } catch (error) {
+      selector.value = traces.active;
+      showNotice(error.message, true);
+    } finally {
+      switchingTrace = false;
+      selector.disabled = false;
+    }
   }
 
   function isEditable(entry) {
@@ -182,11 +299,15 @@
     const entries = state.entries;
     const last = entries.at(-1);
     for (const id of renderedEditors) if (!entries.some((entry) => entry.id === id)) renderedEditors.delete(id);
+    for (const id of collapseOverrides.keys()) if (!entries.some((entry) => entry.id === id)) collapseOverrides.delete(id);
+    for (const id of previewCache.keys()) if (!entries.some((entry) => entry.id === id)) previewCache.delete(id);
     showNotice(state.error || "", !!state.error);
     updateSaveStatus();
-    updateModelName();
-    $("#auto-mode").checked = !!state.auto_mode;
+    updateStatusIndicators();
+    $("#collapse-all").checked = collapseAll;
     $("#stream").innerHTML = entries.map((entry, index) => {
+      const collapsed = isCollapsed(entry);
+      const desc = description(entry);
       const editable = isEditable(entry);
       const editing = editable && viewMode === "rendered" && renderedEditors.has(entry.id);
       const controls = entry.side === "blue" && ["draft", "stale"].includes(entry.status) ?
@@ -195,19 +316,23 @@
         index < entries.length - 1 ? button(rewindIcon, "Delete later messages and return here", "rewind") : "";
       const pen = !state.busy && (entry.side === "gray" || entry.status !== "stale") ?
         button(pencil, renderedEditors.has(entry.id) ? "Done editing" : "Edit message", "edit", "edit") : "";
-      const taps = controls || pen ? `<div class="tapback">${controls}${pen}</div>` : "";
+      const caret = `<button class="collapse" type="button" title="${collapsed ? "Expand" : "Collapse"} bubble" aria-label="${collapsed ? "Expand" : "Collapse"} bubble" aria-expanded="${!collapsed}" data-action="collapse">${collapseIcon}</button>`;
+      const taps = `<div class="tapback">${controls}${pen}${caret}</div>`;
       const editors = editing ? `<div class="render-editors">${editableParts(entry).map((part) =>
         `<label class="render-editor"><span>${escapeHtml(part.label)}</span><textarea spellcheck="false" data-id="${entry.id}" data-editor-path="${escapeHtml(part.path ? JSON.stringify(part.path) : "")}"></textarea></label>`
       ).join("")}</div>` : "";
-      return `<article class="message ${entry.side} ${entry.id === selected ? "selected" : ""} ${editing ? "editing" : ""}" id="m-${entry.id}" data-id="${entry.id}">
-        <div class="message-head">#${index + 1} · ${escapeHtml(description(entry))}</div>
-        <div class="bubble">${taps}${viewMode === "raw" ? `<textarea class="raw-editor" spellcheck="false" aria-label="${escapeHtml(label(entry))} JSON" data-id="${entry.id}" ${editable ? "" : "readonly"}></textarea>` : `<div class="message-text ${viewMode}" data-id="${entry.id}"></div>${editors}`}</div>
+      const cached = previewCache.get(entry.id);
+      const preview = cached?.revision === entry.revision ? cached.text : desc;
+      return `<article class="message ${entry.side} ${collapsed ? "collapsed" : ""} ${entry.id === selected ? "selected" : ""} ${editing ? "editing" : ""}" id="m-${entry.id}" data-id="${entry.id}">
+        <div class="message-head">#${index + 1} · ${escapeHtml(desc)}</div>
+        <div class="bubble">${taps}<div class="collapsed-preview ${viewMode}">${escapeHtml(preview)}</div><div class="expanded-content">${viewMode === "raw" ? `<textarea class="raw-editor" spellcheck="false" aria-label="${escapeHtml(label(entry))} JSON" data-id="${entry.id}" ${editable ? "" : "readonly"}></textarea>` : `<div class="message-text ${viewMode}" data-id="${entry.id}"></div>${editors}`}</div></div>
       </article>`;
     }).join("") + (state.run_complete ? "" : state.busy?.kind === "target" ?
       `<article class="message gray pending"><div class="bubble"><span class="pending-text">Pending response from provider.</span></div></article>` :
       last?.side === "gray" ?
         `<article class="message blue pending"><div class="bubble"><span class="pending-text">Pending a response from your agent.</span><p class="pending-advice">If it stalls, send: “Read review_room/data/session.json and POST a full draft to /api/codex-draft. Do not call the target.”</p></div></article>` : "");
     entries.forEach((entry) => {
+      if (isCollapsed(entry)) return;
       const el = $(`#m-${entry.id} ${viewMode === "raw" ? ".raw-editor" : ".message-text"}`);
       if (el) {
         if (viewMode === "raw") el.value = edits.get(entry.id) ?? entry.current_text;
@@ -237,6 +362,7 @@
         el.scrollLeft = scroll.left;
       }
     }
+    queueVisiblePreviews();
   }
 
   async function refresh(force = false, preservePosition = false) {
@@ -286,6 +412,49 @@
     return {id: anchor.id, fraction: (point - rect.top) / rect.height, point};
   }
 
+  function keepPosition(update) {
+    const scroller = $("#stream");
+    const anchor = captureViewAnchor(scroller);
+    update();
+    const element = anchor && document.getElementById(anchor.id);
+    if (element) {
+      const rect = element.getBoundingClientRect();
+      scroller.scrollTop += rect.top + anchor.fraction * rect.height - anchor.point;
+    }
+    queueVisiblePreviews();
+  }
+
+  function renderAtCurrentPosition() {
+    keepPosition(render);
+  }
+
+  function populateExpanded(entry) {
+    const article = $(`#m-${entry.id}`);
+    if (!article) return;
+    if (viewMode === "raw") {
+      article.querySelector(".raw-editor").value = edits.get(entry.id) ?? entry.current_text;
+    } else {
+      const preview = article.querySelector(".message-text");
+      if (viewMode === "cleaned") preview.textContent = messageContent(entry).text.replace(/\r/g, "\\r").replace(/\n/g, "\\n").replace(/\t/g, "\\t");
+      else showPreview(preview, entry);
+      if (renderedEditors.has(entry.id)) {
+        const fields = article.querySelectorAll(".render-editor textarea");
+        editableParts(entry).forEach((part, index) => { if (fields[index]) fields[index].value = part.value; });
+      }
+    }
+  }
+
+  function setCollapsedDom(entry, collapsed) {
+    const article = $(`#m-${entry.id}`);
+    if (!article) return;
+    article.classList.toggle("collapsed", collapsed);
+    const caret = article.querySelector("[data-action=collapse]");
+    caret.title = `${collapsed ? "Expand" : "Collapse"} bubble`;
+    caret.setAttribute("aria-label", caret.title);
+    caret.setAttribute("aria-expanded", String(!collapsed));
+    if (!collapsed) populateExpanded(entry);
+  }
+
   async function saveEdit(id) {
     clearTimeout(timers.get(id));
     timers.delete(id);
@@ -312,7 +481,16 @@
   async function action(name, id) {
     const last = state.entries.at(-1);
     try {
-      if (name === "edit") {
+      if (name === "collapse") {
+        await saveEdit(id);
+        const entry = state.entries.find((item) => item.id === id);
+        if (!entry) return;
+        const collapsed = !isCollapsed(entry);
+        collapseOverrides.set(id, collapsed);
+        keepPosition(() => setCollapsedDom(entry, collapsed));
+        return;
+      } else if (name === "edit") {
+        if (isCollapsed(state.entries.find((item) => item.id === id))) collapseOverrides.set(id, false);
         if (renderedEditors.has(id)) {
           await saveEdit(id);
           renderedEditors.delete(id);
@@ -408,7 +586,7 @@
     }
     saveError = false;
     updateSaveStatus();
-    updateModelName();
+    updateStatusIndicators();
     clearTimeout(timers.get(id));
     timers.set(id, setTimeout(() => saveEdit(id).catch(() => {}), 900));
   });
@@ -420,30 +598,44 @@
     if (!btn) return;
     action(btn.dataset.action, Number(btn.closest(".message")?.dataset.id || state.entries.at(-1).id));
   });
-  $("#auto-mode").addEventListener("change", async (event) => {
-    const enabled = event.target.checked;
-    try { await api("/api/auto-mode", {enabled}); await refresh(true, true); }
-    catch (error) { event.target.checked = !enabled; showNotice(error.message, true); }
+  $("#collapse-all").addEventListener("change", async (event) => {
+    const collapse = event.target.checked;
+    try {
+      for (const id of [...edits.keys()]) await saveEdit(id);
+      await Promise.all([...saving.values()]);
+      collapseAll = collapse;
+      collapseOverrides.clear();
+      keepPosition(() => state.entries.forEach((entry) => setCollapsedDom(entry, collapse)));
+    } catch (error) {
+      event.target.checked = collapseAll;
+      showNotice(error.message, true);
+    }
+  });
+  $("#trace-select").addEventListener("change", (event) => selectTrace(event.target.value));
+  $("#trace-rename").addEventListener("click", async () => {
+    if (!traces || switchingTrace) return;
+    const current = traces.traces.find((trace) => trace.id === traces.active);
+    const name = prompt("Trace name", current?.name || "");
+    if (name === null || name.trim() === current?.name) return;
+    try {
+      await api("/api/rename-trace", {name});
+      await loadTraces();
+    } catch (error) { showNotice(error.message, true); }
   });
   $("#view-mode").addEventListener("click", (event) => {
     const choice = event.target.closest("[data-view]");
     if (!choice || choice.dataset.view === viewMode) return;
-    const scroller = $("#stream");
-    const anchor = captureViewAnchor(scroller);
     viewMode = choice.dataset.view;
     $("#view-mode").dataset.mode = viewMode;
     $("#view-mode").querySelectorAll("[data-view]").forEach((button) =>
       button.setAttribute("aria-pressed", String(button.dataset.view === viewMode)));
-    render();
-    if (anchor) {
-      const rect = document.getElementById(anchor.id).getBoundingClientRect();
-      scroller.scrollTop += rect.top + anchor.fraction * rect.height - anchor.point;
-    }
+    renderAtCurrentPosition();
   });
-  refresh(true).then(() => {
+  $("#stream").addEventListener("scroll", queueVisiblePreviews, {passive: true});
+  Promise.all([loadTraces(), refresh(true)]).then(() => {
     const fromHash = Number(location.hash.replace("#m-", ""));
     if (fromHash) jump(fromHash);
-  });
-  setInterval(() => refresh(), 1100);
+  }).catch((error) => showNotice(error.message, true));
+  setInterval(() => { if (!switchingTrace) refresh(); }, 1100);
   setInterval(updateSaveStatus, 1000);
 })();

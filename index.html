@@ -9,12 +9,19 @@
 <body>
   <main class="app">
     <header class="topbar">
-      <div id="save-status" class="save-status" role="status" aria-live="polite"></div>
-      <div id="model-name" class="model-name"></div>
+      <div class="status-line">
+        <span id="status-model" class="status-indicator"></span>
+        <span id="status-program" class="status-indicator"></span>
+        <span id="save-status" class="status-indicator save-status" role="status" aria-live="polite"></span>
+      </div>
+      <div class="trace-picker">
+        <select id="trace-select" aria-label="Trace"></select>
+        <button id="trace-rename" type="button" title="Rename trace" aria-label="Rename trace"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4l11.1-11.1a2.1 2.1 0 0 0-3-3L5 17v3Z"/><path d="m14.7 7.3 3 3"/></svg></button>
+      </div>
       <div class="topbar-actions">
-        <label class="auto-switch" title="Allow the auditor to send this session's drafts without a tap">
-          <input id="auto-mode" type="checkbox" aria-label="Auto send">
-          <span>Auto</span>
+        <label class="collapse-switch">
+          <input id="collapse-all" type="checkbox" aria-label="Collapse all bubbles">
+          <span>Collapse</span>
         </label>
         <div id="view-mode" class="view-mode" role="group" aria-label="Message view" data-mode="raw">
           <button type="button" data-view="raw" aria-pressed="true">Raw</button>

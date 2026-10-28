@@ -53,6 +53,10 @@ class ReviewRoomTest(unittest.TestCase):
         with urllib.request.urlopen(self.base + "/api/state") as reply:
             return json.load(reply)
 
+    def get_traces(self):
+        with urllib.request.urlopen(self.base + "/api/traces") as reply:
+            return json.load(reply)
+
     def post(self, action, payload):
         req = urllib.request.Request(self.base + "/api/" + action,
             data=json.dumps(payload).encode(), headers={"Content-Type": "application/json"}, method="POST")
@@ -66,6 +70,32 @@ class ReviewRoomTest(unittest.TestCase):
                 return state
             time.sleep(.02)
         self.fail("Model call did not finish")
+
+    def test_trace_names_and_switch_preserve_each_conversation(self):
+        opening = self.get()
+        self.assertEqual(self.get_traces()["active"], "current")
+        self.post("rename-trace", {"name": "~/better-petri/E110"})
+        self.assertEqual(self.get_traces()["traces"][0]["name"], "~/better-petri/E110")
+
+        other = copy.deepcopy(opening)
+        other["entries"][0]["current_text"] = json.dumps({**server.default_request(), "input": [
+            {"role": "user", "content": "Archived trace"}]})
+        other.pop("saved_at")
+        directory = server.DATA / "traces" / "archive"
+        directory.mkdir(parents=True)
+        (directory / "session.json").write_text(json.dumps(other))
+        server.save_traces({"active": "current", "traces": [
+            {"id": "current", "name": "~/better-petri/E110"},
+            {"id": "archive", "name": "~/better-petri/archive"}]})
+
+        self.post("select-trace", {"id": "archive"})
+        self.assertEqual(self.get_traces()["active"], "archive")
+        self.assertEqual(json.loads(self.get()["entries"][0]["current_text"])["input"][0]["content"], "Archived trace")
+        self.assertTrue((server.DATA / "traces" / "current" / "session.json").is_file())
+        self.post("select-trace", {"id": "current"})
+        self.assertEqual(self.get_traces()["active"], "current")
+        self.assertEqual(self.get()["entries"], opening["entries"])
+        self.assertEqual(self.target_requests, [])
 
     def test_no_target_call_until_exact_request_approved_and_edits_replayed(self):
         state = self.get()
@@ -128,6 +158,8 @@ class ReviewRoomTest(unittest.TestCase):
         self.post("complete-run", {})
         self.assertTrue(self.get()["run_complete"])
         self.assertFalse(self.get()["auto_mode"])
+        self.post("refresh-draft", {"id": self.get()["entries"][-1]["id"]})
+        self.assertFalse(self.get()["run_complete"])
 
     def test_refresh_replaces_blue_draft_without_target_call(self):
         opening = self.get()["entries"][0]

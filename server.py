@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import copy
+import shutil
 import subprocess
 import threading
 import urllib.error
@@ -111,6 +112,45 @@ def load_state():
     save_state(state)
     event("session_created", entry_id=1)
     return state
+
+
+def save_traces(catalog):
+    DATA.mkdir(parents=True, exist_ok=True)
+    target = DATA / "traces.json"
+    temporary = DATA / "traces.tmp"
+    temporary.write_text(dump(catalog) + "\n")
+    os.replace(temporary, target)
+
+
+def load_traces():
+    target = DATA / "traces.json"
+    if target.exists():
+        return json.loads(target.read_text())
+    catalog = {"active": "current", "traces": [{"id": "current", "name": "~/better-petri/current"}]}
+    save_traces(catalog)
+    return catalog
+
+
+def snapshot_active_trace(catalog):
+    directory = DATA / "traces" / catalog["active"]
+    directory.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(STATE_FILE, directory / "session.json")
+    if EVENTS_FILE.exists():
+        shutil.copy2(EVENTS_FILE, directory / "events.jsonl")
+
+
+def replace_from_trace(directory):
+    source = directory / "session.json"
+    if not source.exists():
+        raise ValueError("The selected trace has no saved session.")
+    json.loads(source.read_text())
+    for source_file, target in ((source, STATE_FILE), (directory / "events.jsonl", EVENTS_FILE)):
+        temporary = target.with_suffix(target.suffix + ".trace-tmp")
+        if source_file.exists():
+            shutil.copy2(source_file, temporary)
+            os.replace(temporary, target)
+        else:
+            target.unlink(missing_ok=True)
 
 
 def current_entry(state, entry_id):
@@ -349,6 +389,10 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         path = urlparse(self.path).path
+        if path == "/api/traces":
+            with LOCK:
+                self.send(200, load_traces())
+            return
         if path == "/api/state":
             with LOCK:
                 state = load_state()
@@ -404,6 +448,34 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 if state["busy"]:
                     raise ValueError("A model call is still running.")
+                if path == "/api/rename-trace":
+                    name = data.get("name")
+                    if not isinstance(name, str) or not name.strip() or len(name) > 160 or "\n" in name:
+                        raise ValueError("Trace name must be a single line of 1 to 160 characters.")
+                    catalog = load_traces()
+                    trace = next(item for item in catalog["traces"] if item["id"] == catalog["active"])
+                    trace["name"] = name.strip()
+                    save_traces(catalog)
+                    event("trace_renamed", trace_id=trace["id"], name=trace["name"])
+                    self.send(200, catalog)
+                    return
+                if path == "/api/select-trace":
+                    catalog = load_traces()
+                    trace_id = data.get("id")
+                    if not isinstance(trace_id, str) or trace_id not in {item["id"] for item in catalog["traces"]}:
+                        raise ValueError("Unknown trace.")
+                    if trace_id != catalog["active"]:
+                        target = DATA / "traces" / trace_id
+                        if not (target / "session.json").is_file():
+                            raise ValueError("The selected trace has no saved session.")
+                        previous = catalog["active"]
+                        snapshot_active_trace(catalog)
+                        replace_from_trace(target)
+                        catalog["active"] = trace_id
+                        save_traces(catalog)
+                        event("trace_selected", from_id=previous, to_id=trace_id)
+                    self.send(200, catalog)
+                    return
                 if path == "/api/edit":
                     entry = update_entry(state, int(data["id"]), data["text"])
                     state["error"] = None
@@ -450,6 +522,7 @@ class Handler(BaseHTTPRequestHandler):
                         event("draft_refresh_requested", target_id=target["id"])
                     else:
                         raise ValueError("Only the latest draft or gray response can be refreshed.")
+                    state["run_complete"] = False
                     state["error"] = None
                     save_state(state)
                     self.send(200, {"ok": True})
