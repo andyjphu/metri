@@ -32,14 +32,14 @@ button { cursor: pointer; }
 .view-mode button[aria-pressed="true"] { color: var(--ink); }
 .notice { padding: 8px max(22px, calc((100% - 1080px) / 2)); background: #fff3dd; color: #6f4a0e; border-bottom: 1px solid #eec982; white-space: pre-wrap; font-size: 12px; }
 .notice.error { background: #fff0ef; color: #a83430; border-color: #edc6c3; }
-.request-context { flex: none; padding: 10px max(22px, calc((100% - 1080px) / 2)); color: #55555a; font-size: 12px; }
+.request-context { color: #55555a; font-size: 12px; }
 .request-context summary { cursor: pointer; width: fit-content; }
-.request-context-body { max-height: min(38vh, 340px); overflow: auto; padding: 12px 0 2px; color: var(--ink); }
+.request-context-body { padding: 12px 0 2px; color: var(--ink); }
 .context-field + .context-field { margin-top: 14px; }
 .context-label { margin-bottom: 4px; color: #77777c; font-size: 11px; }
 .context-value { margin: 0; white-space: break-spaces; overflow-wrap: anywhere; }
 .context-value.raw, .context-value.settings-json { font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
-.context-divider { width: 100%; height: 0; margin: 0; border: 0; border-top: 1px solid #ddd; }
+.context-divider { width: 100%; height: 0; margin: 24px 0 30px; border: 0; border-top: 1px solid #ddd; }
 .stream { flex: 1; overflow: auto; overflow-anchor: none; padding: 30px max(22px, calc((100% - 1080px) / 2)) 60px; }
 .message { width: min(86%, 880px); margin: 0 0 32px; scroll-margin: 22px; }
 .message.gray { margin-right: auto; }
@@ -95,7 +95,6 @@ button { cursor: pointer; }
   .status-line { grid-column: 1; grid-row: 2; justify-self: center; }
   .topbar-actions { grid-column: 1; grid-row: 3; justify-self: center; gap: 8px; }
   .view-mode { width: 144px; }
-  .request-context { padding: 10px 12px; }
   .stream { padding: 26px 12px 50px; }
   .message { width: 96%; }
   .bubble textarea { height: 46vh; font-size: 11px; }

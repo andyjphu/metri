@@ -83,7 +83,7 @@
     const names = new Map(input.filter((item) => item.type === "function_call")
       .map((item) => [item.call_id, item.name]));
     return items.flatMap((item) => {
-      if (item.type === "function_call") return [{label: `${item.name || "Tool"} arguments`, text: item.arguments || "", tool: true}];
+      if (item.type === "function_call") return [{label: item.name || "Tool", text: item.arguments || "", tool: true}];
       if (item.type === "function_call_output") return [{label: `${names.get(item.call_id) || "Tool"} result`, text: toolResultText(item.output), tool: true}];
       const content = item.content;
       if (typeof content === "string") return [{label: "Message", text: content, tool: false}];
@@ -148,7 +148,7 @@
     for (const index of indices) {
       const item = items[index];
       if (!item) continue;
-      if (typeof item.arguments === "string") parts.push({path: [key, index, "arguments"], label: `${item.name || "Tool"} arguments`, value: item.arguments});
+      if (typeof item.arguments === "string") parts.push({path: [key, index, "arguments"], label: item.name || "Tool", value: item.arguments});
       if (typeof item.output === "string") parts.push({path: [key, index, "output"], label: `${names.get(item.call_id) || "Tool"} result`, value: item.output});
       if (typeof item.content === "string") parts.push({path: [key, index, "content"], label: "Message", value: item.content});
       if (Array.isArray(item.content)) item.content.forEach((content, partIndex) => {
@@ -228,7 +228,6 @@
 
   function renderRequestContext() {
     const body = $("#request-context-body");
-    const top = body.scrollTop;
     const first = state?.entries?.[0];
     if (!first) { body.replaceChildren(); return; }
     let request;
@@ -265,7 +264,6 @@
       }
     }
     body.replaceChildren(...sections);
-    body.scrollTop = top;
   }
 
   async function loadTraces() {
@@ -348,7 +346,7 @@
     updateStatusIndicators();
     renderRequestContext();
     $("#collapse-all").checked = collapseAll;
-    $("#stream").innerHTML = entries.map((entry, index) => {
+    $("#messages").innerHTML = entries.map((entry, index) => {
       const collapsed = isCollapsed(entry);
       const desc = description(entry);
       const editable = isEditable(entry);
@@ -439,7 +437,7 @@
   function captureViewAnchor(scroller) {
     const box = scroller.getBoundingClientRect();
     const middle = box.top + box.height / 2;
-    const messages = [...scroller.querySelectorAll(".message[data-id]")];
+    const messages = [$("#request-context"), ...scroller.querySelectorAll(".message[data-id]")];
     const visible = messages.filter((el) => {
       const rect = el.getBoundingClientRect();
       return rect.bottom > box.top && rect.top < box.bottom;
