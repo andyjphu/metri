@@ -208,6 +208,7 @@
         if (viewMode === "raw") el.value = edits.get(entry.id) ?? entry.current_text;
         else {
           const content = messageContent(entry);
+          // Legacy Cleaned view is retained for compatibility, but is no longer updated.
           if (viewMode === "cleaned") el.textContent = content.text.replace(/\r/g, "\\r").replace(/\n/g, "\\n").replace(/\t/g, "\\t");
           else showPreview(el, entry);
         }

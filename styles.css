@@ -9,10 +9,10 @@ button { cursor: pointer; }
 .save-status { color: #55555a; font-size: 12px; }
 .model-name { justify-self: center; color: #55555a; font-size: 12px; font-weight: 600; white-space: nowrap; }
 .topbar-actions { justify-self: end; display: flex; align-items: center; gap: 12px; }
-.view-mode { position: relative; display: grid; grid-template-columns: repeat(3, 1fr); width: 207px; height: 30px; padding: 2px; border: 1px solid #d3d3d7; border-radius: 16px; background: #eeeef0; color: #65656b; font-size: 12px; }
-.view-mode::before { content: ""; position: absolute; top: 2px; left: 2px; width: calc((100% - 4px) / 3); height: 24px; border-radius: 13px; background: #fff; box-shadow: 0 1px 3px #0002; transition: transform .18s ease; }
+.view-mode { position: relative; display: grid; grid-template-columns: repeat(2, 1fr); width: 144px; height: 30px; padding: 2px; border: 1px solid #d3d3d7; border-radius: 16px; background: #eeeef0; color: #65656b; font-size: 12px; }
+.view-mode::before { content: ""; position: absolute; top: 2px; left: 2px; width: calc((100% - 4px) / 2); height: 24px; border-radius: 13px; background: #fff; box-shadow: 0 1px 3px #0002; transition: transform .18s ease; }
 .view-mode[data-mode="cleaned"]::before { transform: translateX(100%); }
-.view-mode[data-mode="rendered"]::before { transform: translateX(200%); }
+.view-mode[data-mode="rendered"]::before { transform: translateX(100%); }
 .view-mode button { position: relative; z-index: 1; border: 0; border-radius: 13px; background: transparent; color: inherit; font-size: 12px; }
 .view-mode button[aria-pressed="true"] { color: var(--ink); }
 #jump { max-width: 170px; padding: 5px; border: 1px solid #d3d3d7; border-radius: 6px; background: #fff; color: #4c4c51; font-size: 12px; }
@@ -60,7 +60,7 @@ button { cursor: pointer; }
   .topbar { grid-template-columns: 1fr; padding: 8px 12px; gap: 8px; }
   .save-status { grid-column: 1; grid-row: 2; }
   .topbar-actions { grid-column: 1; grid-row: 3; justify-self: center; gap: 8px; }
-  .view-mode { width: 174px; }
+  .view-mode { width: 144px; }
   #jump { max-width: 110px; }
   .stream { padding: 26px 12px 50px; }
   .message { width: 96%; }

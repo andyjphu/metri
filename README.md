@@ -6,7 +6,7 @@ Blue bubbles contain the full request JSON. Gray bubbles contain the full agent 
 
 The top-left status says whether edits are saved to the local session. If a save is pending when you tap ✓, the page warns and finishes saving before sending. The blue editor's current JSON is included in the approval request itself.
 
-Use Raw for editable JSON, Cleaned for message text with literal `\n` and Markdown markers, or Rendered for message text with line breaks and other whitespace displayed. Rendered leaves Markdown markers as text. Tap the pencil to edit message or tool fields in Rendered. Switching views keeps the current message selected.
+Use Raw for editable JSON or Rendered for message text with line breaks and other whitespace displayed. Rendered leaves Markdown markers as text. Tap the pencil to edit message or tool fields in Rendered. Switching views keeps the current message selected. The old Cleaned view is hidden, retained in code for now, and considered for deprecation; it will receive no future updates.
 
 The first request has an empty task. Add one before approving it. After the agent responds, the server queues this Codex thread to write the next blue draft. Queue delivery is best-effort; if no draft appears, return to this chat. No separate auditor model runs in the app.
 
