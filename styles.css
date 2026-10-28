@@ -7,7 +7,7 @@ button { cursor: pointer; }
 .app { height: 100vh; min-height: 450px; display: flex; flex-direction: column; }
 .topbar { min-height: 48px; flex: none; border-bottom: 1px solid #ddd; display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: center; gap: 12px; padding: 0 max(22px, calc((100% - 1080px) / 2)); }
 .save-status { color: #55555a; font-size: 12px; }
-.model-name { justify-self: center; color: var(--ink); font-size: 14px; font-weight: 400; white-space: nowrap; }
+.model-name { justify-self: center; color: #55555a; font-size: 12px; font-weight: 400; white-space: nowrap; }
 .topbar-actions { justify-self: end; display: flex; align-items: center; gap: 12px; }
 .view-mode { position: relative; display: grid; grid-template-columns: repeat(2, 1fr); width: 144px; height: 30px; padding: 2px; border: 1px solid #d3d3d7; border-radius: 16px; background: #eeeef0; color: #65656b; font-size: 12px; }
 .view-mode::before { content: ""; position: absolute; top: 2px; left: 2px; width: calc((100% - 4px) / 2); height: 24px; border-radius: 13px; background: #fff; box-shadow: 0 1px 3px #0002; transition: transform .18s ease; }

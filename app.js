@@ -152,7 +152,7 @@
     }
     const model = typeof request?.model === "string" ? request.model : "";
     const program = typeof request?.access_programs?.cyber === "string" ? request.access_programs.cyber : "";
-    $("#model-name").textContent = [model, program && `${program}: enabled`].filter(Boolean).join(" · ");
+    $("#model-name").textContent = [model, program && `${program}: enabled`].filter(Boolean).join(" ");
   }
 
   function isEditable(entry) {
