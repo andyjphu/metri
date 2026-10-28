@@ -107,6 +107,28 @@ class ReviewRoomTest(unittest.TestCase):
         self.assertEqual(self.target_requests[1]["input"][-1]["output"], '{"stdout":"human approved edit"}')
         self.assertEqual(self.target_requests[1]["input"][-2]["arguments"], '{"edited":true}')
 
+    def test_auto_send_requires_explicit_session_switch_and_logs_exact_request(self):
+        opening = self.get()["entries"][0]
+        request = json.loads(opening["current_text"])
+        request["input"][0]["content"] = "A local research task"
+        with self.assertRaises(urllib.error.HTTPError) as error:
+            self.post("auto-send", {"id": opening["id"], "text": json.dumps(request)})
+        self.assertEqual(error.exception.code, 400)
+        error.exception.close()
+        self.assertEqual(self.target_requests, [])
+        self.post("auto-mode", {"enabled": True})
+        self.assertTrue(self.get()["auto_mode"])
+        self.post("auto-send", {"id": opening["id"], "text": json.dumps(request)})
+        self.await_idle()
+        self.assertEqual(self.target_requests, [request])
+        events = [json.loads(line) for line in server.EVENTS_FILE.read_text().splitlines()]
+        self.assertEqual([e for e in events if e["kind"] == "auto_send"][0]["exact_request"], request)
+        self.post("auto-mode", {"enabled": False})
+        self.assertFalse(self.get()["auto_mode"])
+        self.post("complete-run", {})
+        self.assertTrue(self.get()["run_complete"])
+        self.assertFalse(self.get()["auto_mode"])
+
     def test_refresh_replaces_blue_draft_without_target_call(self):
         opening = self.get()["entries"][0]
         request = json.loads(opening["current_text"])

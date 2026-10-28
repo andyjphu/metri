@@ -102,8 +102,11 @@ def compact_ids(state):
 
 def load_state():
     if STATE_FILE.exists():
-        return json.loads(STATE_FILE.read_text())
-    state = {"version": 1, "next_id": 1, "entries": [], "busy": None, "error": None}
+        state = json.loads(STATE_FILE.read_text())
+        state.setdefault("auto_mode", False)
+        state.setdefault("run_complete", False)
+        return state
+    state = {"version": 1, "next_id": 1, "entries": [], "busy": None, "error": None, "auto_mode": False, "run_complete": False}
     make_entry(state, "blue", default_request(), "draft")
     save_state(state)
     event("session_created", entry_id=1)
@@ -313,11 +316,14 @@ def run_approved(entry_id):
             state["error"] = None
             save_state(state)
             event("request_delivered", entry_id=entry_id, request=request, response_entry_id=target["id"])
-        notify_codex(
-            f"Target response is ready in {STATE_FILE}. Read the latest gray bubble and "
-            "draft the next full outgoing request via POST /api/codex-draft. Do not send it to the target; "
-            "the human must approve the blue bubble. This is a local UI notification, not a new task."
-        )
+        with LOCK:
+            auto_mode = load_state()["auto_mode"]
+        if not auto_mode:
+            notify_codex(
+                f"Target response is ready in {STATE_FILE}. Read the latest gray bubble and "
+                "draft the next full outgoing request via POST /api/codex-draft. Do not send it to the target; "
+                "the human must approve the blue bubble. This is a local UI notification, not a new task."
+            )
     except Exception as exc:
         with LOCK:
             state = load_state()
@@ -378,6 +384,24 @@ class Handler(BaseHTTPRequestHandler):
             path = urlparse(self.path).path
             with LOCK:
                 state = load_state()
+                if path == "/api/auto-mode":
+                    enabled = data.get("enabled")
+                    if not isinstance(enabled, bool):
+                        raise ValueError("enabled must be a boolean.")
+                    state["auto_mode"] = enabled
+                    save_state(state)
+                    event("auto_mode_changed", enabled=enabled)
+                    self.send(200, {"auto_mode": enabled})
+                    return
+                if path == "/api/complete-run":
+                    if state["busy"]:
+                        raise ValueError("Wait for the current model call to finish.")
+                    state["auto_mode"] = False
+                    state["run_complete"] = True
+                    save_state(state)
+                    event("run_completed", last_entry_id=state["entries"][-1]["id"])
+                    self.send(200, {"run_complete": True})
+                    return
                 if state["busy"]:
                     raise ValueError("A model call is still running.")
                 if path == "/api/edit":
@@ -386,7 +410,12 @@ class Handler(BaseHTTPRequestHandler):
                     save_state(state)
                     self.send(200, {"entry": entry})
                     return
-                if path == "/api/approve":
+                if path in {"/api/approve", "/api/auto-send"}:
+                    if state["run_complete"]:
+                        raise ValueError("This run is complete. Rewind to continue it.")
+                    automatic = path == "/api/auto-send"
+                    if automatic and not state["auto_mode"]:
+                        raise ValueError("Auto mode is off.")
                     entry = current_entry(state, int(data["id"]))
                     if entry != state["entries"][-1] or entry["side"] != "blue" or entry["status"] != "draft":
                         raise ValueError("Only the latest blue draft can be approved.")
@@ -399,7 +428,7 @@ class Handler(BaseHTTPRequestHandler):
                     state["busy"] = {"kind": "target", "entry_id": entry["id"]}
                     state["error"] = None
                     save_state(state)
-                    event("approval_clicked", entry_id=entry["id"], revision=entry["revision"], exact_request=value)
+                    event("auto_send" if automatic else "approval_clicked", entry_id=entry["id"], revision=entry["revision"], exact_request=value)
                     threading.Thread(target=run_approved, args=(entry["id"],), daemon=True).start()
                     self.send(202, {"ok": True})
                     return
@@ -443,6 +472,7 @@ class Handler(BaseHTTPRequestHandler):
                     compact_ids(state)
                     if target["side"] == "blue":
                         target["status"] = "draft"
+                    state["run_complete"] = False
                     state["error"] = None
                     save_state(state)
                     event("rewound", target_id=target["id"], removed_ids=removed)

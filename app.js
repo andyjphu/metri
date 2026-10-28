@@ -185,6 +185,7 @@
     showNotice(state.error || "", !!state.error);
     updateSaveStatus();
     updateModelName();
+    $("#auto-mode").checked = !!state.auto_mode;
     $("#stream").innerHTML = entries.map((entry, index) => {
       const editable = isEditable(entry);
       const editing = editable && viewMode === "rendered" && renderedEditors.has(entry.id);
@@ -202,7 +203,7 @@
         <div class="message-head">#${index + 1} · ${escapeHtml(description(entry))}</div>
         <div class="bubble">${taps}${viewMode === "raw" ? `<textarea class="raw-editor" spellcheck="false" aria-label="${escapeHtml(label(entry))} JSON" data-id="${entry.id}" ${editable ? "" : "readonly"}></textarea>` : `<div class="message-text ${viewMode}" data-id="${entry.id}"></div>${editors}`}</div>
       </article>`;
-    }).join("") + (state.busy?.kind === "target" ?
+    }).join("") + (state.run_complete ? "" : state.busy?.kind === "target" ?
       `<article class="message gray pending"><div class="bubble"><span class="pending-text">Pending response from provider.</span></div></article>` :
       last?.side === "gray" ?
         `<article class="message blue pending"><div class="bubble"><span class="pending-text">Pending a response from your agent.</span><p class="pending-advice">If it stalls, send: “Read review_room/data/session.json and POST a full draft to /api/codex-draft. Do not call the target.”</p></div></article>` : "");
@@ -242,7 +243,7 @@
     try {
       const response = await fetch(stateUrl, {cache: "no-store"});
       const next = await response.json();
-      const signature = JSON.stringify(next.entries.map((e) => [e.id, e.revision, e.status])) + JSON.stringify(next.busy) + next.error;
+      const signature = JSON.stringify(next.entries.map((e) => [e.id, e.revision, e.status])) + JSON.stringify(next.busy) + next.error + next.auto_mode + next.run_complete;
       state = next;
       if (!force && signature === lastSignature) return;
       lastSignature = signature;
@@ -418,6 +419,11 @@
     const btn = event.target.closest("[data-action]");
     if (!btn) return;
     action(btn.dataset.action, Number(btn.closest(".message")?.dataset.id || state.entries.at(-1).id));
+  });
+  $("#auto-mode").addEventListener("change", async (event) => {
+    const enabled = event.target.checked;
+    try { await api("/api/auto-mode", {enabled}); await refresh(true, true); }
+    catch (error) { event.target.checked = !enabled; showNotice(error.message, true); }
   });
   $("#view-mode").addEventListener("click", (event) => {
     const choice = event.target.closest("[data-view]");

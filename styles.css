@@ -9,6 +9,11 @@ button { cursor: pointer; }
 .save-status { color: #55555a; font-size: 12px; }
 .model-name { justify-self: center; color: #55555a; font-size: 12px; font-weight: 400; white-space: nowrap; }
 .topbar-actions { justify-self: end; display: flex; align-items: center; gap: 12px; }
+.auto-switch { display: flex; align-items: center; gap: 6px; color: #55555a; font-size: 12px; white-space: nowrap; cursor: pointer; }
+.auto-switch input { appearance: none; width: 30px; height: 18px; margin: 0; border-radius: 9px; background: #d3d3d7; position: relative; cursor: pointer; }
+.auto-switch input::after { content: ""; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px #0003; transition: transform .15s ease; }
+.auto-switch input:checked { background: var(--blue); }
+.auto-switch input:checked::after { transform: translateX(12px); }
 .view-mode { position: relative; display: grid; grid-template-columns: repeat(2, 1fr); width: 144px; height: 30px; padding: 2px; border: 1px solid #d3d3d7; border-radius: 16px; background: #eeeef0; color: #65656b; font-size: 12px; }
 .view-mode::before { content: ""; position: absolute; top: 2px; left: 2px; width: calc((100% - 4px) / 2); height: 24px; border-radius: 13px; background: #fff; box-shadow: 0 1px 3px #0002; transition: transform .18s ease; }
 .view-mode[data-mode="cleaned"]::before { transform: translateX(100%); }
