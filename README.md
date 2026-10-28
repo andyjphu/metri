@@ -4,6 +4,8 @@ Run `python3 -m review_room.server --port 8765` from the repository root, then o
 
 The name in the middle of the bar selects the active trace. The pencil beside it renames that trace. The current E110 run and archived V8 rerun have separate names; switching saves the run you leave and restores the one you select. Model, access program, and save age sit together at the left of the bar.
 
+Each trace has an `EXPERIMENT_CARD.md` beside its local logs. The active copy is in `data/`; archived copies sit under `data/traces/<trace>/`. The card tracks message #1's system prompt and request settings, with an AI-authored environment note and links to local research files.
+
 Open **System prompt & settings** at the top of the conversation to inspect the `instructions` field and request settings from message #1. It scrolls with the messages. Raw shows their JSON form; Rendered shows the prompt's actual line breaks and the settings as fields. This area reads only message #1 and updates when you edit it.
 
 Blue bubbles contain the full request JSON. Gray bubbles contain the full agent response JSON. The pencil beside a bubble opens editing, including for earlier messages. Earlier edits update the matching history in later blue requests while keeping later bubbles. ✓ approves and sends a blue draft; ↻ asks Codex to redo the draft without calling the target. Editing the gray response immediately before an unsent blue draft marks that draft stale until ↻ replaces it. In Manual mode, no request reaches the agent before ✓. Scroll to an earlier bubble and tap ↶ to delete everything after it and continue in the same conversation.

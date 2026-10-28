@@ -465,6 +465,16 @@
     queueVisiblePreviews();
   }
 
+  function keepMessageTop(id, update) {
+    const scroller = $("#stream");
+    const article = $(`#m-${id}`);
+    const before = article?.getBoundingClientRect().top;
+    update();
+    const after = $(`#m-${id}`)?.getBoundingClientRect().top;
+    if (before !== undefined && after !== undefined) scroller.scrollTop += after - before;
+    queueVisiblePreviews();
+  }
+
   function renderAtCurrentPosition() {
     keepPosition(render);
   }
@@ -528,7 +538,7 @@
         if (!entry) return;
         const collapsed = !isCollapsed(entry);
         collapseOverrides.set(id, collapsed);
-        keepPosition(() => setCollapsedDom(entry, collapsed));
+        keepMessageTop(id, () => setCollapsedDom(entry, collapsed));
         return;
       } else if (name === "edit") {
         if (isCollapsed(state.entries.find((item) => item.id === id))) collapseOverrides.set(id, false);

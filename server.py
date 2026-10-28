@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import copy
+import re
 import shutil
 import subprocess
 import threading
@@ -43,6 +44,7 @@ def save_state(state):
     tmp = STATE_FILE.with_suffix(".tmp")
     tmp.write_text(dump(state) + "\n")
     os.replace(tmp, STATE_FILE)
+    sync_active_experiment_card(state)
 
 
 def event(kind, **details):
@@ -129,6 +131,70 @@ def load_traces():
     catalog = {"active": "current", "traces": [{"id": "current", "name": "~/better-petri/current"}]}
     save_traces(catalog)
     return catalog
+
+
+def fenced(value, language=""):
+    text = value if isinstance(value, str) else dump(value)
+    runs = re.findall(r"`{3,}", text)
+    fence = "`" * (max((len(run) for run in runs), default=2) + 1)
+    return f"{fence}{language}\n{text}\n{fence}"
+
+
+def experiment_card(state, trace, directory):
+    first = state["entries"][0]
+    try:
+        request = json.loads(first["current_text"])
+        if not isinstance(request, dict):
+            raise ValueError("Message #1 is not a request object.")
+        prompt = request.get("instructions", "")
+        settings = {key: value for key, value in request.items() if key not in {"instructions", "input"}}
+        prompt_block = fenced(prompt, "text")
+        settings_block = fenced(settings, "json")
+    except (ValueError, TypeError, json.JSONDecodeError):
+        prompt_block = "Message #1 does not contain valid request JSON."
+        settings_block = "Message #1 does not contain valid request JSON."
+    parts = [f"# {trace['name']}", "Source: message #1 of this trace.",
+             "## System prompt", prompt_block, "## Request settings", settings_block]
+    note = trace.get("environment_note", "")
+    if note:
+        parts.extend(["## Environment note (AI-authored)", note])
+    references = trace.get("references", [])
+    if references:
+        parts.append("## Related files")
+        for reference in references:
+            target = HERE.parent / reference["path"]
+            relative = os.path.relpath(target, directory)
+            parts.append(f"- [{reference['label']}]({relative})")
+    return "\n\n".join(parts) + "\n"
+
+
+def write_if_changed(path, content):
+    if path.exists() and path.read_text() == content:
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(".tmp")
+    temporary.write_text(content)
+    os.replace(temporary, path)
+
+
+def sync_active_experiment_card(state, catalog=None):
+    catalog = catalog or load_traces()
+    trace = next(item for item in catalog["traces"] if item["id"] == catalog["active"])
+    for directory in (DATA, DATA / "traces" / trace["id"]):
+        write_if_changed(directory / "EXPERIMENT_CARD.md", experiment_card(state, trace, directory))
+
+
+def sync_all_experiment_cards():
+    catalog = load_traces()
+    for trace in catalog["traces"]:
+        active = trace["id"] == catalog["active"]
+        source = STATE_FILE if active else DATA / "traces" / trace["id"] / "session.json"
+        if source.exists():
+            state = json.loads(source.read_text())
+            directory = DATA / "traces" / trace["id"]
+            write_if_changed(directory / "EXPERIMENT_CARD.md", experiment_card(state, trace, directory))
+            if active:
+                write_if_changed(DATA / "EXPERIMENT_CARD.md", experiment_card(state, trace, DATA))
 
 
 def snapshot_active_trace(catalog):
@@ -456,8 +522,31 @@ class Handler(BaseHTTPRequestHandler):
                     trace = next(item for item in catalog["traces"] if item["id"] == catalog["active"])
                     trace["name"] = name.strip()
                     save_traces(catalog)
+                    sync_active_experiment_card(state, catalog)
                     event("trace_renamed", trace_id=trace["id"], name=trace["name"])
                     self.send(200, catalog)
+                    return
+                if path == "/api/experiment-note":
+                    note = data.get("note")
+                    references = data.get("references", [])
+                    if not isinstance(note, str) or len(note) > 20_000:
+                        raise ValueError("note must be text under 20,000 characters.")
+                    if not isinstance(references, list) or len(references) > 20:
+                        raise ValueError("references must be a list of at most 20 files.")
+                    for reference in references:
+                        if not isinstance(reference, dict) or not isinstance(reference.get("label"), str) or not isinstance(reference.get("path"), str):
+                            raise ValueError("Each reference needs a label and repository-relative path.")
+                        target = (HERE.parent / reference["path"]).resolve()
+                        if not target.is_relative_to(HERE.parent) or not target.is_file():
+                            raise ValueError("Each reference must be an existing file in this repository.")
+                    catalog = load_traces()
+                    trace = next(item for item in catalog["traces"] if item["id"] == catalog["active"])
+                    trace["environment_note"] = note
+                    trace["references"] = references
+                    save_traces(catalog)
+                    sync_active_experiment_card(state, catalog)
+                    event("experiment_note_updated", trace_id=trace["id"], note=note, references=references)
+                    self.send(200, {"ok": True})
                     return
                 if path == "/api/select-trace":
                     catalog = load_traces()
@@ -473,6 +562,7 @@ class Handler(BaseHTTPRequestHandler):
                         replace_from_trace(target)
                         catalog["active"] = trace_id
                         save_traces(catalog)
+                        sync_active_experiment_card(load_state(), catalog)
                         event("trace_selected", from_id=previous, to_id=trace_id)
                     self.send(200, catalog)
                     return
@@ -586,6 +676,7 @@ def main():
     args = parser.parse_args()
     with LOCK:
         load_state()
+        sync_all_experiment_cards()
     server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
     print(f"Review room: http://127.0.0.1:{args.port}", flush=True)
     server.serve_forever()

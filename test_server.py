@@ -73,9 +73,20 @@ class ReviewRoomTest(unittest.TestCase):
 
     def test_trace_names_and_switch_preserve_each_conversation(self):
         opening = self.get()
+        card = server.DATA / "EXPERIMENT_CARD.md"
+        self.assertIn("## System prompt", card.read_text())
         self.assertEqual(self.get_traces()["active"], "current")
         self.post("rename-trace", {"name": "~/better-petri/E110"})
         self.assertEqual(self.get_traces()["traces"][0]["name"], "~/better-petri/E110")
+        request = json.loads(opening["entries"][0]["current_text"])
+        request["instructions"] = "Changed first prompt"
+        request["temperature"] = 0.42
+        self.post("edit", {"id": 1, "text": json.dumps(request)})
+        self.assertIn("Changed first prompt", card.read_text())
+        self.assertIn('"temperature": 0.42', card.read_text())
+        self.post("experiment-note", {"note": "AI description of the local setup.", "references": [
+            {"label": "Instructions", "path": "review_room/README.md"}]})
+        self.assertIn("AI description of the local setup.", card.read_text())
 
         other = copy.deepcopy(opening)
         other["entries"][0]["current_text"] = json.dumps({**server.default_request(), "input": [
@@ -84,17 +95,20 @@ class ReviewRoomTest(unittest.TestCase):
         directory = server.DATA / "traces" / "archive"
         directory.mkdir(parents=True)
         (directory / "session.json").write_text(json.dumps(other))
-        server.save_traces({"active": "current", "traces": [
-            {"id": "current", "name": "~/better-petri/E110"},
-            {"id": "archive", "name": "~/better-petri/archive"}]})
+        catalog = self.get_traces()
+        catalog["traces"].append({"id": "archive", "name": "~/better-petri/archive"})
+        server.save_traces(catalog)
 
         self.post("select-trace", {"id": "archive"})
         self.assertEqual(self.get_traces()["active"], "archive")
         self.assertEqual(json.loads(self.get()["entries"][0]["current_text"])["input"][0]["content"], "Archived trace")
+        self.assertNotIn("AI description of the local setup.", card.read_text())
         self.assertTrue((server.DATA / "traces" / "current" / "session.json").is_file())
         self.post("select-trace", {"id": "current"})
         self.assertEqual(self.get_traces()["active"], "current")
-        self.assertEqual(self.get()["entries"], opening["entries"])
+        self.assertEqual(json.loads(self.get()["entries"][0]["current_text"])["instructions"], "Changed first prompt")
+        self.assertIn("AI description of the local setup.", card.read_text())
+        self.assertTrue((server.DATA / "traces" / "current" / "EXPERIMENT_CARD.md").is_file())
         self.assertEqual(self.target_requests, [])
 
     def test_no_target_call_until_exact_request_approved_and_edits_replayed(self):
