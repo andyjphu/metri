@@ -2,6 +2,8 @@
 
 A local conversation room for reviewing a model's full requests and responses. Edit either side of the conversation. Every outgoing request waits for your ✓ before it reaches the model.
 
+![Better Petri conversation overview](images/overview.png)
+
 ## Start
 
 You need Python 3.10+, a browser, an OpenAI API key, and access to a model. No packages or build step are needed.
