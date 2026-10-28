@@ -226,6 +226,48 @@
     $("#status-program").hidden = !program;
   }
 
+  function renderRequestContext() {
+    const body = $("#request-context-body");
+    const top = body.scrollTop;
+    const first = state?.entries?.[0];
+    if (!first) { body.replaceChildren(); return; }
+    let request;
+    try { request = JSON.parse(edits.get(first.id) ?? first.current_text); }
+    catch { body.textContent = "Message #1 has invalid JSON."; return; }
+    if (!request || typeof request !== "object" || Array.isArray(request)) {
+      body.textContent = "Message #1 is not a request object.";
+      return;
+    }
+    const field = (label, value, className = "") => {
+      const section = document.createElement("section");
+      section.className = "context-field";
+      const heading = document.createElement("div");
+      heading.className = "context-label";
+      heading.textContent = label;
+      const content = document.createElement("pre");
+      content.className = `context-value ${className}`;
+      content.textContent = value;
+      section.append(heading, content);
+      return section;
+    };
+    const hasPrompt = Object.hasOwn(request, "instructions");
+    const prompt = hasPrompt ? request.instructions : undefined;
+    const promptText = !hasPrompt ? "(not set)" : viewMode === "raw" ?
+      JSON.stringify(prompt, null, 2) : typeof prompt === "string" ? prompt : JSON.stringify(prompt, null, 2);
+    const settings = Object.fromEntries(Object.entries(request).filter(([key]) => key !== "instructions" && key !== "input"));
+    const sections = [field("System prompt", promptText, viewMode === "raw" ? "raw" : "")];
+    if (viewMode === "raw") {
+      sections.push(field("Settings", JSON.stringify(settings, null, 2), "raw"));
+    } else {
+      for (const [key, value] of Object.entries(settings)) {
+        sections.push(field(key, typeof value === "string" ? value : JSON.stringify(value, null, 2),
+          typeof value === "object" ? "settings-json" : ""));
+      }
+    }
+    body.replaceChildren(...sections);
+    body.scrollTop = top;
+  }
+
   async function loadTraces() {
     const response = await fetch("/api/traces", {cache: "no-store"});
     if (!response.ok) throw Error("Could not load traces.");
@@ -304,6 +346,7 @@
     showNotice(state.error || "", !!state.error);
     updateSaveStatus();
     updateStatusIndicators();
+    renderRequestContext();
     $("#collapse-all").checked = collapseAll;
     $("#stream").innerHTML = entries.map((entry, index) => {
       const collapsed = isCollapsed(entry);
@@ -587,6 +630,7 @@
     saveError = false;
     updateSaveStatus();
     updateStatusIndicators();
+    if (id === state.entries[0]?.id) renderRequestContext();
     clearTimeout(timers.get(id));
     timers.set(id, setTimeout(() => saveEdit(id).catch(() => {}), 900));
   });
