@@ -26,6 +26,10 @@ An agent's debrief after a run:
 
 ![Gray agent response and pending blue draft](images/debrief.png)
 
+Following up on an earlier message:
+
+![Follow-up question and agent response](images/follow-up.png)
+
 Editing an earlier agent message and tool call:
 
 ![Editable agent message and write_file arguments](images/edit-response.png)
