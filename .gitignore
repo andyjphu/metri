@@ -1,0 +1,6 @@
+review_room/data/
+**/__pycache__/
+*.pyc
+.venv/
+.env
+.DS_Store
