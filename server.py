@@ -27,6 +27,7 @@ EVENTS_FILE = DATA / "events.jsonl"
 LOCK = threading.RLock()
 API_URL = "https://api.openai.com/v1/responses"
 OPENROUTER_URL = "https://openrouter.ai/api/v1/responses"
+OPENROUTER_SESSION_KEY = None
 MODELS_FILE = HERE / "models.yml"
 CODEX_THREAD_ID = os.environ.get("METRI_CODEX_THREAD_ID") or os.environ.get("CODEX_THREAD_ID")
 
@@ -422,10 +423,14 @@ def swap_models():
     return [option for option in model_catalog()["models"] if option.get("swap")]
 
 
+def openrouter_key():
+    return OPENROUTER_SESSION_KEY or os.environ.get("OPENROUTER_API_KEY")
+
+
 def call_openrouter(payload):
-    key = os.environ.get("OPENROUTER_API_KEY")
+    key = openrouter_key()
     if not key:
-        raise RuntimeError("Set OPENROUTER_API_KEY before starting Metri.")
+        raise RuntimeError("Enter an OpenRouter API key to generate this response.")
     request = urllib.request.Request(
         OPENROUTER_URL, data=json.dumps(payload).encode(), method="POST",
         headers={"Authorization": "Bearer " + key, "Content-Type": "application/json"},
@@ -1161,7 +1166,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/api/swap-models":
             try:
-                self.send(200, {"models": swap_models()})
+                self.send(200, {"models": swap_models(), "openrouter_ready": bool(openrouter_key())})
             except (OSError, yaml.YAMLError, ValueError) as exc:
                 self.send(500, {"error": f"Cannot load model choices: {exc}"})
             return
@@ -1484,8 +1489,14 @@ class Handler(BaseHTTPRequestHandler):
                     option = next((item for item in swap_models() if item["id"] == data.get("option")), None)
                     if option is None:
                         raise ValueError("Choose a configured model.")
-                    if option["provider"] == "openrouter" and not os.environ.get("OPENROUTER_API_KEY"):
-                        raise ValueError("Set OPENROUTER_API_KEY before starting Metri.")
+                    supplied_key = data.get("api_key")
+                    if supplied_key is not None:
+                        if option["provider"] != "openrouter" or not isinstance(supplied_key, str) or not supplied_key.strip() or len(supplied_key) > 1000:
+                            raise ValueError("Enter a valid OpenRouter API key.")
+                        global OPENROUTER_SESSION_KEY
+                        OPENROUTER_SESSION_KEY = supplied_key.strip()
+                    if option["provider"] == "openrouter" and not openrouter_key():
+                        raise ValueError("Enter an OpenRouter API key to generate this response.")
                     index = state["entries"].index(target)
                     source = parsed(state["entries"][index - 1])
                     validate_request(source)
@@ -1568,12 +1579,27 @@ class Handler(BaseHTTPRequestHandler):
                     threading.Thread(target=run_approved, args=(entry["id"],), daemon=True).start()
                     self.send(202, {"ok": True})
                     return
+                if path == "/api/generate-response":
+                    if state["run_complete"] or state["auto_mode"] or state["busy"]:
+                        raise ValueError("Pause Auto and wait before generating a response.")
+                    entry = current_entry(state, int(data["id"]))
+                    if entry != state["entries"][-1] or entry["side"] != "blue" or entry["status"] != "approved":
+                        raise ValueError("Choose the latest approved blue message.")
+                    request = parsed(entry)
+                    validate_request(request)
+                    state["busy"] = {"kind": "target", "entry_id": entry["id"]}
+                    state["error"] = None
+                    save_state(state)
+                    event("response_generation_requested", entry_id=entry["id"], exact_request=request)
+                    threading.Thread(target=run_approved, args=(entry["id"],), daemon=True).start()
+                    self.send(202, {"ok": True})
+                    return
                 if path == "/api/manual-response":
                     if state["run_complete"] or state["auto_mode"] or state["busy"]:
                         raise ValueError("Pause Auto and wait for the current response.")
                     entry = current_entry(state, int(data["id"]))
-                    if entry != state["entries"][-1] or entry["side"] != "blue" or entry["status"] != "draft":
-                        raise ValueError("A manual response needs the latest blue draft.")
+                    if entry != state["entries"][-1] or entry["side"] != "blue" or entry["status"] not in {"draft", "approved"}:
+                        raise ValueError("A manual response needs the latest blue message.")
                     request = parsed(entry)
                     validate_request(request)
                     response = data.get("response")
@@ -1662,7 +1688,8 @@ class Handler(BaseHTTPRequestHandler):
                     expected = parsed(state["entries"][-2])["input"] + replay_output(target)
                     if value["input"][:len(expected)] != expected:
                         raise ValueError("Draft must replay the approved request and current agent response.")
-                    draft = make_entry(state, "blue", value, "draft")
+                    draft = make_entry(state, "blue", value,
+                                       "approved" if path == "/api/manual-draft" else "draft")
                     if path == "/api/manual-draft":
                         ensure_versions(state, load_traces()["active"], draft)
                         active = next(item for item in draft["versions"] if item["id"] == draft["active_version"])

@@ -35,6 +35,8 @@
   let saveError = false;
   let traces = null;
   let modelCatalog = null;
+  let swapModelOptions = [];
+  let openrouterReady = false;
   let switchingTrace = false;
   let traceRenameId = null;
   let changingAuto = false;
@@ -584,8 +586,19 @@
 
   function messageHeading(entry, index) {
     const slug = state.model_slugs?.[entry.id];
-    const manual = entry.versions?.find((version) => version.id === entry.active_version)?.kind === "manual";
+    const manual = isManualVersion(entry);
     return `${messageNumber(entry, index)}${slug ? ` · ${escapeHtml(slug)}` : ""}${manual ? " · Manual" : ""}`;
+  }
+
+  function isManualVersion(entry) {
+    return entry.versions?.find((version) => version.id === entry.active_version)?.kind === "manual";
+  }
+
+  function syncSwapKeyField() {
+    const selected = $("#swap-options input:checked")?.value;
+    const option = swapModelOptions.find((item) => item.id === selected);
+    $("#swap-key-field").hidden = option?.provider !== "openrouter";
+    $("#swap-key").placeholder = openrouterReady ? "Key ready for this session" : "Paste API key";
   }
 
   function manualContext() {
@@ -701,7 +714,7 @@
       const blocked = Boolean(state.pending_edit);
       const controls = pending ? `${button(approveIcon, "Confirm edit", "confirm-edit", "approve")}${button(discardIcon, "Discard edit", "discard-edit")}` : blocked ? "" :
         entry.side === "blue" && ["draft", "stale"].includes(entry.status) ?
-          `${entry.status === "draft" && !state.busy && sendingId !== entry.id ? button(approveIcon, "Approve and send", "approve", "approve") : ""}${index > 0 ? button(refreshIcon, "Refresh blue draft", "refresh-draft", "refresh-draft") : ""}` :
+          `${entry.status === "draft" && !isManualVersion(entry) && !state.busy && sendingId !== entry.id ? button(approveIcon, "Approve and send", "approve", "approve") : ""}${index > 0 ? button(refreshIcon, "Refresh blue draft", "refresh-draft", "refresh-draft") : ""}` :
           entry === last && entry.side === "gray" ? button(refreshIcon, "Refresh blue draft", "refresh-draft", "refresh-draft") :
           index < entries.length - 1 ? button(rewindIcon, "Delete later messages and return here", "rewind") : "";
       const pen = !blocked && !state.busy && (entry.side === "gray" || entry.status !== "stale") ?
@@ -732,8 +745,8 @@
       return message + auditor;
     }).join("") + (state.busy?.kind === "swap" || state.run_complete ? "" : state.busy?.kind === "target" ?
       `<article class="message gray pending"><div class="bubble"><span class="pending-text">Pending response from provider.</span></div></article>` :
-      last?.side === "blue" && last.status === "draft" && !state.pending_edit ?
-        `<article class="message gray response-add"><div class="add-options"><button type="button" data-action="approve" aria-label="Approve request and generate AI response">+ AI</button><button type="button" data-action="manual-compose" aria-label="Create manual response">+ Manual</button></div></article>` :
+      last?.side === "blue" && ["draft", "approved"].includes(last.status) && !state.pending_edit ?
+        `<article class="message gray response-add"><div class="add-options"><button type="button" data-action="${last.status === "approved" ? "generate-response" : "approve"}" aria-label="Generate AI response">+ AI</button><button type="button" data-action="manual-compose" aria-label="Create manual response">+ Manual</button></div></article>` :
       last?.side === "gray" && !state.pending_edit ?
         state.auto_generate === false && !state.draft_pending ?
           `<article class="message blue draft-add"><div class="add-options"><button type="button" data-action="refresh-draft" aria-label="Generate AI request">+ AI</button><button type="button" data-action="manual-compose" aria-label="Create manual request">+ Manual</button></div></article>` :
@@ -976,7 +989,7 @@
 
   async function action(name, id) {
     const last = state.entries.at(-1);
-    if (name === "approve" && sendingId !== null) return;
+    if (["approve", "generate-response"].includes(name) && sendingId !== null) return;
     try {
       if (name === "search-message") {
         if (messageSearch?.id === id) {
@@ -1069,6 +1082,8 @@
         if (!variantResponse.ok) throw Error(variantResult.error || "Could not load earlier responses.");
         const saved = storedValue(swapModelKey);
         const selectedOption = modelResult.models.some((option) => option.id === saved) ? saved : modelResult.models[0]?.id;
+        swapModelOptions = modelResult.models;
+        openrouterReady = Boolean(modelResult.openrouter_ready);
         $("#swap-options").innerHTML = modelResult.models.map((option) =>
           `<label class="swap-option"><input type="radio" name="swap-option" value="${escapeHtml(option.id)}" ${option.id === selectedOption ? "checked" : ""}><span>${escapeHtml(option.label)}</span></label>`
         ).join("");
@@ -1088,6 +1103,8 @@
         $("#swap-submit").textContent = "Use version";
         $("#swap-submit").disabled = true;
         $("#swap-error").hidden = true;
+        $("#swap-key").value = "";
+        syncSwapKeyField();
         dialog.showModal();
         return;
       } else if (name === "rewind") {
@@ -1103,6 +1120,15 @@
         edits.clear();
         renderedEditors.clear();
         saveError = false;
+      } else if (name === "generate-response") {
+        await finishEdits();
+        if (state.entries.at(-1)?.id !== last.id || last.status !== "approved")
+          throw Error("The blue message changed. Review it before generating a response.");
+        sendingId = last.id;
+        await api("/api/generate-response", {id: last.id});
+        sendingId = null;
+        await refresh(true);
+        return;
       } else if (name === "approve") {
         await finishEdits();
         sendingId = last.id;
@@ -1123,7 +1149,7 @@
         if (newest) jump(newest.id);
       }
     } catch (error) {
-      if (name === "approve") {
+      if (["approve", "generate-response"].includes(name)) {
         sendingId = null;
         await refresh(true, true);
       }
@@ -1186,6 +1212,8 @@
     action(btn.dataset.action, Number(btn.closest(".message")?.dataset.id || state.entries.at(-1).id));
   });
   $("#swap-cancel").addEventListener("click", () => $("#swap-dialog").close());
+  $("#swap-dialog").addEventListener("close", () => { $("#swap-key").value = ""; });
+  $("#swap-options").addEventListener("change", syncSwapKeyField);
   $("#swap-new").addEventListener("click", () => {
     $("#swap-dialog").dataset.mode = "generate";
     $("#swap-title").textContent = "New response";
@@ -1194,6 +1222,7 @@
     $("#swap-submit").textContent = "Generate";
     $("#swap-submit").disabled = false;
     $("#swap-error").hidden = true;
+    syncSwapKeyField();
     $("#swap-options input:checked")?.focus();
   });
   $("#swap-back").addEventListener("click", () => {
@@ -1222,7 +1251,13 @@
       await finishEdits();
       if (generation) {
         if (!option) throw Error("Choose a model.");
-        await api("/api/swap-model", {id: Number(dialog.dataset.id), option});
+        const selectedModel = swapModelOptions.find((item) => item.id === option);
+        const apiKey = $("#swap-key").value.trim();
+        if (selectedModel?.provider === "openrouter" && !openrouterReady && !apiKey)
+          throw Error("Enter an OpenRouter API key.");
+        await api("/api/swap-model", {id: Number(dialog.dataset.id), option,
+          ...(apiKey ? {api_key: apiKey} : {})});
+        if (apiKey) openrouterReady = true;
         storeValue(swapModelKey, option);
       } else {
         if (!variant || variant === "active") throw Error("Choose another version.");
@@ -1264,7 +1299,7 @@
       await finishEdits();
       const {last, request, calls} = manualContext();
       if (last.id !== Number(dialog.dataset.sourceId) ||
-          (dialog.dataset.side === "gray" ? last.side !== "blue" || last.status !== "draft" : last.side !== "gray"))
+          (dialog.dataset.side === "gray" ? last.side !== "blue" || !["draft", "approved"].includes(last.status) : last.side !== "gray"))
         throw Error("The conversation changed. Reopen the composer.");
       const parts = [...$("#manual-parts").querySelectorAll(".manual-part")];
       if (!parts.length) throw Error("Add a message or tool item.");

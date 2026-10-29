@@ -85,7 +85,7 @@ button { cursor: pointer; }
 .rail-segment.agent-tool { background: #ff9500; }
 .rail-segment.tool-result { background: #00a7b8; }
 .rail-segment.request { background: #34c759; }
-.rail-thumb { position: absolute; left: 8px; width: 1px; background: #757575; pointer-events: none; }
+.rail-thumb { position: absolute; left: 5px; width: 1px; background: #3c3c4099; pointer-events: none; }
 .rail-point { position: absolute; left: 0; display: block; width: 14px; height: 14px; padding: 0; transform: translateY(-50%); border: 0; border-radius: 50%; background: transparent; }
 .rail-point::before { content: "•"; position: absolute; top: 2px; left: 4px; height: 9px; color: #616161; background: #fff; font-size: 9px; line-height: 9px; }
 .rail-point:hover::before, .rail-point:focus-visible::before { color: #1c1c1e; }
@@ -187,6 +187,11 @@ mark.message-search-hit.current { outline: 2px solid #ff9500; }
 .swap-option:has(input:checked):focus-within { outline: none; }
 .swap-option input { position: absolute; width: 1px; height: 1px; opacity: 0; }
 .swap-option small { display: block; margin-top: 2px; color: #77777c; font-size: 11px; }
+.swap-key-field { margin-top: 14px; }
+.swap-key-field[hidden] { display: none; }
+.swap-key-field label { display: block; margin-bottom: 5px; color: #77777c; font-size: 12px; }
+.swap-key-field input { display: block; width: 100%; padding: 9px 10px; border: 1px solid #d5d5d9; border-radius: 10px; background: #f8f8fa; color: var(--ink); font-size: 13px; }
+.swap-key-field input:focus { outline: 2px solid #80b5fb; outline-offset: 1px; }
 .swap-new { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 48px; margin-top: 8px; padding: 10px 12px; border: 1px dashed #c8c8cf; border-radius: 12px; background: #fbfbfc; color: #55555a; text-align: left; font-size: 12px; }
 .swap-new[hidden] { display: none; }
 .swap-new:hover, .swap-back:hover { background: #f0f0f4; }

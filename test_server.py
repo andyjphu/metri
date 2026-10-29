@@ -19,7 +19,7 @@ class MetriTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.original = (server.DATA, server.STATE_FILE, server.EVENTS_FILE, server.MODELS_FILE,
-                         server.call_api, server.call_swap_model, server.CODEX_THREAD_ID)
+                         server.call_api, server.call_swap_model, server.CODEX_THREAD_ID, server.OPENROUTER_SESSION_KEY)
         server.DATA = Path(self.tmp.name)
         server.STATE_FILE = server.DATA / "session.json"
         server.EVENTS_FILE = server.DATA / "events.jsonl"
@@ -27,6 +27,7 @@ class MetriTest(unittest.TestCase):
         server.MODELS_FILE = server.DATA / "models.yml"
         server.MODELS_FILE.write_text(model_config)
         server.CODEX_THREAD_ID = None
+        server.OPENROUTER_SESSION_KEY = None
         (server.DATA / "EXPERIMENT_CARD.md").write_text(
             "# Local test\n\n## System prompt\n\n```text\nTest instructions\n```\n\n"
             "## Request settings\n\n```json\n{\"model\":\"test-model\",\"store\":false}\n```\n"
@@ -57,7 +58,7 @@ class MetriTest(unittest.TestCase):
         self.http.server_close()
         self.thread.join(timeout=2)
         (server.DATA, server.STATE_FILE, server.EVENTS_FILE, server.MODELS_FILE,
-         server.call_api, server.call_swap_model, server.CODEX_THREAD_ID) = self.original
+         server.call_api, server.call_swap_model, server.CODEX_THREAD_ID, server.OPENROUTER_SESSION_KEY) = self.original
         self.tmp.cleanup()
 
     def get(self):
@@ -258,12 +259,35 @@ class MetriTest(unittest.TestCase):
         ]
         next_entry = self.post("manual-draft", {"request": draft})["entry"]
         self.assertEqual(next_entry["side"], "blue")
-        self.assertEqual(next_entry["status"], "draft")
+        self.assertEqual(next_entry["status"], "approved")
         self.assertEqual(next_entry["versions"][0]["kind"], "manual")
         self.assertEqual(self.target_requests, [])
         events = [json.loads(line)["kind"] for line in server.EVENTS_FILE.read_text().splitlines()]
         self.assertIn("manual_response_created", events)
         self.assertIn("manual_draft_created", events)
+        self.post("generate-response", {"id": next_entry["id"]})
+        self.await_idle()
+        self.assertEqual(len(self.target_requests), 1)
+
+    def test_manual_blue_can_receive_manual_gray_without_provider_call(self):
+        self.post("auto-generate", {"enabled": False})
+        first = self.get()["entries"][0]
+        previous = json.loads(first["current_text"])
+        previous["input"][0]["content"] = "Begin"
+        self.post("edit", {"id": first["id"], "text": json.dumps(previous)})
+        self.post("manual-response", {"id": first["id"], "response": {
+            "model": "test-model", "output": [{"type": "message", "role": "assistant",
+                "content": [{"type": "output_text", "text": "First reply"}]}]}})
+        gray = json.loads(self.get()["entries"][-1]["current_text"])
+        draft = copy.deepcopy(previous)
+        draft["input"] += gray["output"] + [{"role": "user", "content": "Continue"}]
+        blue = self.post("manual-draft", {"request": draft})["entry"]
+        self.assertEqual(blue["status"], "approved")
+        self.post("manual-response", {"id": blue["id"], "response": {
+            "model": "test-model", "output": [{"type": "message", "role": "assistant",
+                "content": [{"type": "output_text", "text": "Second reply"}]}]}})
+        self.assertEqual(self.target_requests, [])
+        self.assertEqual([entry["side"] for entry in self.get()["entries"]], ["blue", "gray", "blue", "gray"])
 
     def test_manual_response_rejects_unavailable_tools(self):
         first = json.loads(self.get()["entries"][0]["current_text"])
@@ -473,9 +497,10 @@ class MetriTest(unittest.TestCase):
                 {"type": "reasoning", "content": [{"type": "reasoning_text", "text": "I should inspect."}]},
                 {"type": "function_call", "name": "setup", "call_id": "call_glm", "arguments": "{}"}]}
         server.call_swap_model = fake_model
-        with mock.patch.dict("os.environ", {"OPENROUTER_API_KEY": "test-key"}):
-            self.post("swap-model", {"id": gray["id"], "option": "glm-high"})
+        with mock.patch.dict("os.environ", {"OPENROUTER_API_KEY": ""}):
+            self.post("swap-model", {"id": gray["id"], "option": "glm-high", "api_key": "test-key"})
             state = self.await_idle()
+        self.assertEqual(server.openrouter_key(), "test-key")
         swapped = json.loads(state["entries"][1]["current_text"])
         self.assertEqual(len(seen), 1)
         self.assertEqual(seen[0][1]["model"], "z-ai/glm-5.3")
@@ -485,6 +510,7 @@ class MetriTest(unittest.TestCase):
         self.assertEqual(len(state["entries"]), 2)
         self.assertNotEqual(swapped["output"], original["output"])
         events = [json.loads(line) for line in server.EVENTS_FILE.read_text().splitlines()]
+        self.assertNotIn("test-key", server.EVENTS_FILE.read_text() + server.STATE_FILE.read_text())
         swap = next(event for event in events if event["kind"] == "gray_swapped")
         self.assertEqual(swap["removed_ids"], [3])
         self.assertEqual(len(json.loads((server.DATA / swap["archive"] / "session.json").read_text())["entries"]), 3)
