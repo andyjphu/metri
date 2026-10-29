@@ -2,6 +2,8 @@
 
 Install dependencies with `python3 -m pip install -r metri/requirements.txt`. Run `python3 -m metri.server --port 8765` from the repository root, then open <http://127.0.0.1:8765>.
 
+Agents setting up Metri should follow [AGENTS.md](AGENTS.md), including provider-key checks before starting the server.
+
 The name in the middle of the bar opens the trace list. Hover over any trace and click its pencil to rename it without switching; the dialog changes its displayed name, not its storage ID. Switching saves the run you leave and restores the one you select. The left of the bar shows save age; Settings selects the default model for new traces.
 
 Each trace has an `EXPERIMENT_CARD.md` beside its local logs. The active copy is in `data/`; archived copies sit under `data/traces/<trace>/`. The card tracks message #1's system prompt and request settings, with an AI-authored environment note and links to local research files.

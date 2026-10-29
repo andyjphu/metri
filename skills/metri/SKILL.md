@@ -5,6 +5,8 @@ description: Run or improve the local Metri model simulation, including manual o
 
 # Metri
 
+For a fresh installation, follow `metri/AGENTS.md` before opening or running a trace. Check provider credential readiness without printing keys. If an OpenRouter key is already available from the user's configured credential source, pass it in the server process environment so the user need not enter it for each swap. If it is unavailable, say so and leave the model dialog's session-only key entry as the fallback. Never put a key in a trace, event, repository file, or chat message.
+
 Locate the `metri/` directory containing `server.py` in the working repository. Its server holds the exact request and response JSON in `data/session.json` and records edits and sends in `data/events.jsonl`. The user sees blue outgoing requests and gray target responses at `http://127.0.0.1:8765`.
 
 `GET /api/traces` names the available traces and identifies the active one. The active trace alone is mirrored in `data/session.json` and `data/events.jsonl`. Switching through `POST /api/select-trace` saves the active trace under `data/traces/<id>/` and restores the selected trace. Read the active trace name before drafting, and do not silently switch traces for a queued draft notification. `POST /api/rename-trace` changes the active trace's display name.
