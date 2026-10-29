@@ -108,6 +108,19 @@
     return input.slice(start);
   }
 
+  function railKind(entry) {
+    let value;
+    try { value = JSON.parse(edits.get(entry.id) ?? entry.current_text); }
+    catch { return "chat"; }
+    const items = entry.side === "gray" ? value?.output :
+      currentInputItems(Array.isArray(value?.input) ? value.input : []);
+    if (!Array.isArray(items)) return "chat";
+    const tool = items.some((item) => ["function_call", "function_call_output"].includes(item?.type));
+    const chat = items.some((item) => item?.type === "message" ||
+      ["user", "assistant", "system", "developer"].includes(item?.role));
+    return tool && chat ? "mixed" : tool ? "tool" : "chat";
+  }
+
   function description(entry) {
     try {
       const obj = JSON.parse(entry.current_text);
@@ -422,7 +435,7 @@
     const segments = document.createDocumentFragment();
     const articles = [...scroller.querySelectorAll(".message[data-id]")];
     for (const [index, article] of articles.entries()) {
-      const kind = ["agent-tool", "agent-text", "tool-result", "request"]
+      const kind = ["tool", "chat", "mixed"]
         .find((name) => article.classList.contains(name));
       if (!kind) continue;
       const segment = document.createElement("span");
@@ -731,9 +744,8 @@
       ).join("")}</div>` : "";
       const cached = previewCache.get(entry.id);
       const preview = cached?.revision === entry.revision ? cached.text : desc;
-      const railKind = entry.side === "gray" ? (desc.startsWith("Tool call") ? "agent-tool" : "agent-text") :
-        desc.startsWith("Tool response") ? "tool-result" : "request";
-      const message = `<article class="message ${entry.side} ${railKind} ${collapsed ? "collapsed" : ""} ${entry.id === selected ? "selected" : ""} ${editing ? "editing" : ""} ${pending ? "pending-edit" : ""}" id="m-${entry.id}" data-id="${entry.id}">
+      const railClass = railKind(entry);
+      const message = `<article class="message ${entry.side} ${railClass} ${collapsed ? "collapsed" : ""} ${entry.id === selected ? "selected" : ""} ${editing ? "editing" : ""} ${pending ? "pending-edit" : ""}" id="m-${entry.id}" data-id="${entry.id}">
         <div class="message-head">${messageHeading(entry, index)} · ${escapeHtml(desc)}</div>
         <div class="bubble">${taps}${searchBar}<div class="collapsed-preview ${viewMode}">${escapeHtml(preview)}</div><div class="expanded-content">${viewMode === "raw" ? `<textarea class="raw-editor" spellcheck="false" aria-label="${escapeHtml(label(entry))} JSON" data-id="${entry.id}" ${editable ? "" : "readonly"}></textarea>` : `<div class="message-text ${viewMode}" data-id="${entry.id}"></div>${editors}`}</div></div>
       </article>`;

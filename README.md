@@ -20,7 +20,7 @@ On any gray bubble, ⇄ shows previously generated responses for that request, n
 
 Collapse messages is in the top-bar settings. Each bubble's caret stays visible; its other controls appear as you approach the bubble. The caret folds or expands just that bubble. Folding changes only the view, not the saved conversation. The browser remembers the collapse choices for each trace.
 
-The left rail maps the full conversation. Thin colored sections mark agent responses, tool calls, tool results, and requests; the dark segment shows the visible part. Click the rail to scroll, or click a dot or its label to jump to a named moment. An agent can add dots for each trace in `data/rails/<trace-id>.yml`, using [this example](examples/rail.yml). Hover over the rail to see all bookmark labels. The rail recalculates from the bubbles' actual heights as they expand or collapse.
+The left rail maps the full conversation. The one-pixel line is red for tool work, green for chat, and orange when a message mixes both; the dark segment shows the visible part. Click the rail to scroll, or click a dot or its label to jump to a named moment. An agent can add dots for each trace in `data/rails/<trace-id>.yml`, using [this example](examples/rail.yml). Hover over the rail to see all bookmark labels. The rail recalculates from the bubbles' actual heights as they expand or collapse.
 
 Top-bar settings has separate Auto-approve and Auto-generate switches. Auto-approve starts or pauses an authorized unattended run. Auto-generate makes a blue draft after each gray response; when off, use + AI or + Manual at the next blue-message position. New traces start with Auto-generate off. The packaged [Metri skill](skills/metri/SKILL.md) defines the auditor's stop rules.
 
