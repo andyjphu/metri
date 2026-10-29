@@ -566,6 +566,9 @@
       .find((el) => (el.dataset.editorPath ?? null) === path);
     const entries = state.entries;
     const last = entries.at(-1);
+    const swapIndex = state.busy?.kind === "swap" ?
+      entries.findIndex((entry) => entry.id === state.busy.entry_id) : -1;
+    const visibleEntries = swapIndex < 0 ? entries : entries.slice(0, swapIndex + 1);
     const auditorByGray = new Map();
     for (const exchange of state.auditor_history || []) {
       const items = auditorByGray.get(exchange.after_gray_id) || [];
@@ -583,7 +586,8 @@
     updateAutoGenerate();
     renderRequestContext();
     $("#collapse-all").checked = collapseAll;
-    $("#messages").innerHTML = entries.map((entry, index) => {
+    $("#messages").innerHTML = visibleEntries.map((entry, index) => {
+      if (index === swapIndex) return `<article class="message gray pending" id="m-${entry.id}" data-id="${entry.id}" aria-live="polite"><div class="bubble"><span class="pending-text">Pending response from provider.</span></div></article>`;
       const collapsed = isCollapsed(entry);
       const desc = description(entry);
       const editable = isEditable(entry);
@@ -619,9 +623,7 @@
           state.auditor_exchange?.at(-1)?.answer == null;
         return `<article class="message auditor"><div class="message-head">Auditor question${pendingAnswer ? " | Pending response from your agent" : ""}</div><div class="bubble"><div class="auditor-part">${escapeHtml(exchange.question)}</div>${exchange.answer == null ? "" : `<div class="auditor-answer"><div class="auditor-part-label">Answer to auditor</div><div class="auditor-part">${escapeHtml(exchange.answer)}</div></div>`}</div></article>`;
       }).join("");
-      const swapping = state.busy?.kind === "swap" && state.busy.entry_id === entry.id ?
-        `<article class="message gray pending" aria-live="polite"><div class="bubble"><span class="pending-text">Pending response from provider.</span></div></article>` : "";
-      return message + swapping + auditor;
+      return message + auditor;
     }).join("") + (state.busy?.kind === "swap" || state.run_complete ? "" : state.busy?.kind === "target" ?
       `<article class="message gray pending"><div class="bubble"><span class="pending-text">Pending response from provider.</span></div></article>` :
       last?.side === "gray" && !state.pending_edit ?
@@ -646,7 +648,7 @@
         }
       }
       if (viewMode === "rendered" && renderedEditors.has(entry.id)) {
-        const fields = $(`#m-${entry.id}`).querySelectorAll(".render-editor textarea");
+        const fields = $(`#m-${entry.id}`)?.querySelectorAll(".render-editor textarea") || [];
         editableParts(entry).forEach((part, index) => { if (fields[index]) fields[index].value = part.value; });
       }
     });
