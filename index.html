@@ -27,10 +27,10 @@
             <div class="settings-row"><span>Draft with</span><div id="draft-source-control" class="view-mode source-mode" role="group" aria-label="Draft with" data-mode="codex"><button type="button" data-source="codex" aria-pressed="true">Agent</button><button type="button" data-source="api" aria-pressed="false">API</button></div></div>
             <label class="settings-row topbar-switch"><span>Auto-approve</span><input id="auto-mode" type="checkbox" role="switch" aria-label="Auto-approve"></label>
             <label class="settings-row topbar-switch"><span>Auto-generate</span><input id="auto-generate" type="checkbox" role="switch" aria-label="Auto-generate blue drafts"></label>
-            <label class="settings-row topbar-switch settings-divider"><span>Collapse all</span><input id="collapse-all" type="checkbox" role="switch" aria-label="Collapse all bubbles"></label>
-            <div class="settings-info">
-              <div class="settings-row"><span>Model</span><span id="status-model" class="settings-value"></span></div>
-              <div id="status-program-row" class="settings-row" hidden><span>Access</span><span id="status-program" class="settings-value"></span></div>
+            <label class="settings-row topbar-switch settings-divider"><span>Collapse messages</span><input id="collapse-all" type="checkbox" role="switch" aria-label="Collapse messages"></label>
+            <div class="settings-models">
+              <div class="settings-models-title">Default model</div>
+              <div id="default-model-options" class="settings-model-options" role="group" aria-label="Default model"></div>
             </div>
           </div>
         </div>
@@ -67,7 +67,14 @@
         <div id="swap-options" class="swap-options" role="radiogroup" aria-label="Model"></div>
       </div>
       <div id="swap-error" class="swap-error" role="alert" hidden></div>
-      <div class="swap-actions"><button type="button" id="swap-cancel">Cancel</button><button type="submit" id="swap-submit">Use response</button></div>
+      <div class="swap-actions"><button type="button" id="swap-cancel">Cancel</button><button type="submit" id="swap-submit">Use version</button></div>
+    </form>
+  </dialog>
+  <dialog id="rewind-dialog" class="swap-dialog rewind-dialog" aria-labelledby="rewind-title" aria-describedby="rewind-detail">
+    <form method="dialog">
+      <div id="rewind-title" class="swap-title"></div>
+      <p id="rewind-detail"></p>
+      <div class="swap-actions"><button type="submit" value="cancel">Cancel</button><button id="rewind-confirm" class="destructive" type="submit" value="rewind">Delete messages</button></div>
     </form>
   </dialog>
   <script src="/app.js"></script>

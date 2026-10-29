@@ -12,6 +12,7 @@ import subprocess
 import threading
 import urllib.error
 import urllib.request
+import uuid
 import yaml
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -26,7 +27,7 @@ EVENTS_FILE = DATA / "events.jsonl"
 LOCK = threading.RLock()
 API_URL = "https://api.openai.com/v1/responses"
 OPENROUTER_URL = "https://openrouter.ai/api/v1/responses"
-SWAP_MODELS_FILE = HERE / "swap_models.yml"
+MODELS_FILE = HERE / "models.yml"
 CODEX_THREAD_ID = os.environ.get("METRI_CODEX_THREAD_ID") or os.environ.get("CODEX_THREAD_ID")
 
 
@@ -112,8 +113,21 @@ def blank_request():
     return {"model": "", "instructions": "", "input": [{"role": "user", "content": ""}], "store": False}
 
 
+def new_trace_request():
+    catalog = model_catalog()
+    option = next(item for item in catalog["models"] if item["id"] == catalog["default"])
+    request = blank_request()
+    request["model"] = option["model"]
+    request["max_output_tokens"] = option["max_output_tokens"]
+    if option.get("access_programs"):
+        request["access_programs"] = copy.deepcopy(option["access_programs"])
+    if option.get("reasoning_effort"):
+        request["reasoning"] = {"effort": option["reasoning_effort"]}
+    return request
+
+
 def default_request():
-    """Recover experiment details from logs, then the card; otherwise leave them blank."""
+    """Recover experiment details from logs or the card, then use the configured default."""
     from_events = request_from_events(EVENTS_FILE)
     if from_events:
         request = {key: value for key, value in from_events.items()
@@ -124,7 +138,7 @@ def default_request():
     from_card = request_from_card(DATA / "EXPERIMENT_CARD.md")
     if from_card:
         return from_card
-    return blank_request()
+    return new_trace_request()
 
 
 def make_entry(state, side, value, status):
@@ -132,6 +146,11 @@ def make_entry(state, side, value, status):
         "id": state["next_id"], "side": side, "status": status,
         "current_text": dump(value), "revision": 0,
     }
+    if side == "gray":
+        entry["variant_key"] = uuid.uuid4().hex
+    elif side == "blue" and state.get("pending_draft_versions"):
+        entry["versions"] = state.pop("pending_draft_versions")
+        append_version(entry, entry["current_text"], "generated")
     state["next_id"] += 1
     state["entries"].append(entry)
     return entry
@@ -159,6 +178,7 @@ def load_state():
         state.setdefault("draft_error", None)
         state.setdefault("auditor_exchange", [])
         state.setdefault("auditor_history", [])
+        state.setdefault("pending_edit", None)
         return state
     catalog = load_traces()
     snapshot = DATA / "traces" / catalog["active"] / "session.json"
@@ -173,12 +193,14 @@ def load_state():
         state.setdefault("draft_error", None)
         state.setdefault("auditor_exchange", [])
         state.setdefault("auditor_history", [])
+        state.setdefault("pending_edit", None)
         save_state(state)
         return state
     state = {"version": 1, "next_id": 1, "entries": [], "busy": None, "error": None,
              "auto_mode": False, "auto_generate": True, "run_complete": False, "draft_source": "codex",
              "draft_generation": 0, "draft_pending": False, "draft_error": None,
              "auditor_exchange": [], "auditor_history": []}
+    state["pending_edit"] = None
     make_entry(state, "blue", default_request(), "draft")
     save_state(state)
     event("session_created", entry_id=1)
@@ -323,11 +345,11 @@ def call_api(payload):
         raise RuntimeError(f"OpenAI HTTP {exc.code}: {body[:2500]}") from exc
 
 
-def swap_models():
-    source = yaml.safe_load(SWAP_MODELS_FILE.read_text())
+def model_catalog():
+    source = yaml.safe_load(MODELS_FILE.read_text())
     choices = source.get("models") if isinstance(source, dict) else None
     if not isinstance(choices, list) or not choices:
-        raise ValueError("swap_models.yml needs a nonempty models list.")
+        raise ValueError("models.yml needs a nonempty models list.")
     seen = set()
     for option in choices:
         if (not isinstance(option, dict)
@@ -336,15 +358,55 @@ def swap_models():
                 or option["id"] in seen
                 or not isinstance(option.get("label"), str)
                 or not option["label"].strip()
+                or not isinstance(option.get("description"), str)
+                or not option["description"].strip()
                 or option.get("provider") not in {"openai", "openrouter"}
                 or not isinstance(option.get("model"), str)
                 or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:/~+-]{0,127}", option["model"])
-                or option.get("reasoning_effort") not in {"low", "medium", "high", "xhigh", "max"}
+                or option.get("reasoning_effort") not in {None, "low", "medium", "high", "xhigh", "max"}
                 or type(option.get("max_output_tokens")) is not int
-                or not 1 <= option["max_output_tokens"] <= 100_000):
-            raise ValueError("Invalid or duplicate model in swap_models.yml.")
+                or not 1 <= option["max_output_tokens"] <= 100_000
+                or not isinstance(option.get("swap", False), bool)
+                or (option.get("swap") and not option.get("reasoning_effort"))
+                or not isinstance(option.get("access_programs", {}), dict)
+                or any(not isinstance(key, str) or not isinstance(value, str)
+                       for key, value in option.get("access_programs", {}).items())):
+            raise ValueError("Invalid or duplicate model in models.yml.")
         seen.add(option["id"])
-    return choices
+    if source.get("default") not in seen:
+        raise ValueError("models.yml default must name an available model.")
+    return source
+
+
+def swap_models():
+    return [option for option in model_catalog()["models"] if option.get("swap")]
+
+
+def call_openrouter(payload):
+    key = os.environ.get("OPENROUTER_API_KEY")
+    if not key:
+        raise RuntimeError("Set OPENROUTER_API_KEY before starting Metri.")
+    request = urllib.request.Request(
+        OPENROUTER_URL, data=json.dumps(payload).encode(), method="POST",
+        headers={"Authorization": "Bearer " + key, "Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=180) as response:
+            return json.load(response)
+    except urllib.error.HTTPError as exc:
+        raise RuntimeError(f"OpenRouter HTTP {exc.code}: {exc.read().decode(errors='replace')[:1500]}") from exc
+
+
+def call_target_api(payload):
+    matches = [item for item in model_catalog()["models"] if item["model"] == payload.get("model")]
+    exact = next((item for item in matches
+                  if item.get("access_programs", {}) == payload.get("access_programs", {})), None)
+    option = exact or (matches[0] if matches else None)
+    if option and option["provider"] == "openrouter":
+        result = call_openrouter(payload)
+        validate_target(result)
+        return result
+    return call_api(payload)
 
 
 def call_swap_model(original, option):
@@ -361,19 +423,8 @@ def call_swap_model(original, option):
         result = call_api(payload)
         validate_target(result)
         return result
-    key = os.environ.get("OPENROUTER_API_KEY")
-    if not key:
-        raise RuntimeError("Set OPENROUTER_API_KEY before starting Metri.")
     payload["reasoning"]["exclude"] = False
-    request = urllib.request.Request(
-        OPENROUTER_URL, data=json.dumps(payload).encode(), method="POST",
-        headers={"Authorization": "Bearer " + key, "Content-Type": "application/json"},
-    )
-    try:
-        with urllib.request.urlopen(request, timeout=180) as response:
-            result = json.load(response)
-    except urllib.error.HTTPError as exc:
-        raise RuntimeError(f"OpenRouter HTTP {exc.code}: {exc.read().decode(errors='replace')[:1500]}") from exc
+    result = call_openrouter(payload)
     validate_target(result)
     return result
 
@@ -623,7 +674,7 @@ def run_api_draft(trace_id, target_id, target_revision, generation):
 
 
 def queue_next_draft(state, reason, force=False):
-    if state["run_complete"] or not state["entries"] or state["entries"][-1]["side"] != "gray":
+    if state.get("pending_edit") or state["run_complete"] or not state["entries"] or state["entries"][-1]["side"] != "gray":
         return
     target = state["entries"][-1]
     state["auditor_exchange"] = []
@@ -765,6 +816,11 @@ def propagate_edit(state, edited_index, old_values, new_values, old_revisions):
         before = entry["current_text"]
         entry["current_text"] = dump(request)
         entry["revision"] += 1
+        if entry.get("versions"):
+            active = next((item for item in entry["versions"]
+                           if item["id"] == entry.get("active_version")), None)
+            if active:
+                active["raw"] = entry["current_text"]
         events.append((entry, before))
     return events
 
@@ -817,7 +873,7 @@ def run_approved(entry_id):
             state = load_state()
             entry = current_entry(state, entry_id)
             request = parsed(entry)
-        response = call_api(request)
+        response = call_target_api(request)
         with LOCK:
             state = load_state()
             entry = current_entry(state, entry_id)
@@ -839,13 +895,23 @@ def run_approved(entry_id):
 
 
 def response_variants(state, trace_id, target):
+    if target.get("versions"):
+        return [{"id": "active" if item["id"] == target.get("active_version") else item["id"],
+                 "number": number, "model": item["model"], "kind": item["kind"],
+                 "created_at": item.get("created_at"),
+                 "active": item["id"] == target.get("active_version")}
+                for number, item in enumerate(target["versions"], 1)]
+    if target["side"] == "blue":
+        value = parsed(target)
+        return [{"id": "active", "number": 1, "model": value.get("model", "Unknown model"),
+                 "kind": "generated", "created_at": value.get("created_at"), "active": True}]
     index = state["entries"].index(target)
     source = parsed(state["entries"][index - 1])
-    active = parsed(target)
-    variants = [{"id": "active", "model": active.get("model", "Unknown model"),
-                 "created_at": active.get("created_at"), "active": True}]
+    variants = []
+    seen = set()
+    active_key = target.get("variant_key") or sha(target["current_text"])
     prefix = f"swap-{trace_id}-{target['id']}-"
-    for file in sorted((DATA / "archive").glob(f"{prefix}*/session.json"), reverse=True):
+    for file in sorted((DATA / "archive").glob(f"{prefix}*/session.json")):
         try:
             snapshot = json.loads(file.read_text())
             entries = snapshot["entries"]
@@ -856,12 +922,72 @@ def response_variants(state, trace_id, target):
             validate_target(prior)
         except (OSError, ValueError, KeyError, IndexError, TypeError):
             continue
-        variants.append({"id": file.parent.name, "model": prior.get("model", "Unknown model"),
-                         "created_at": prior.get("created_at"), "active": False})
+        key = entries[index].get("variant_key") or sha(entries[index]["current_text"])
+        if key in seen:
+            continue
+        seen.add(key)
+        variants.append({"id": "active" if key == active_key else file.parent.name,
+                         "number": len(variants) + 1, "model": prior.get("model", "Unknown model"),
+                         "kind": "generated", "created_at": prior.get("created_at"), "active": key == active_key})
+    if active_key not in seen:
+        active = parsed(target)
+        variants.append({"id": "active", "number": len(variants) + 1,
+                         "model": active.get("model", "Unknown model"),
+                         "kind": "generated", "created_at": active.get("created_at"), "active": True})
     return variants
 
 
-def replace_gray(state, trace_id, target, raw_response, event_kind, **details):
+def ensure_versions(state, trace_id, target):
+    if target.get("versions"):
+        return
+    versions = []
+    if target["side"] == "gray":
+        index = state["entries"].index(target)
+        source = parsed(state["entries"][index - 1])
+        prefix = f"swap-{trace_id}-{target['id']}-"
+        seen = set()
+        for file in sorted((DATA / "archive").glob(f"{prefix}*/session.json")):
+            try:
+                entries = json.loads(file.read_text())["entries"]
+                if len(entries) <= index or parsed(entries[index - 1]) != source:
+                    continue
+                prior = entries[index]
+                if prior["side"] != "gray":
+                    continue
+                validate_target(parsed(prior))
+                key = prior.get("variant_key") or sha(prior["current_text"])
+                if key in seen:
+                    continue
+                seen.add(key)
+                versions.append({"id": key, "raw": prior["current_text"],
+                                 "model": parsed(prior).get("model", "Unknown model"),
+                                 "kind": "generated", "created_at": parsed(prior).get("created_at")})
+            except (OSError, ValueError, KeyError, IndexError, TypeError):
+                continue
+    key = target.get("variant_key") or uuid.uuid4().hex
+    if not any(item["id"] == key for item in versions):
+        versions.append({"id": key, "raw": target["current_text"],
+                         "model": parsed(target).get("model", "Unknown model"),
+                         "kind": "generated", "created_at": parsed(target).get("created_at")})
+    target["versions"] = versions
+    target["active_version"] = key
+
+
+def append_version(target, raw, kind):
+    value = json.loads(raw)
+    key = uuid.uuid4().hex
+    target["versions"].append({"id": key, "raw": raw,
+                               "model": value.get("model", "Unknown model"),
+                               "kind": kind, "created_at": now()})
+    target["active_version"] = key
+    if target["side"] == "gray":
+        target["variant_key"] = key
+    return key
+
+
+def replace_gray(state, trace_id, target, raw_response, event_kind, variant_key=None, **details):
+    ensure_versions(state, trace_id, target)
+    state.pop("pending_draft_versions", None)
     target_id = target["id"]
     archive = DATA / "archive" / f"swap-{trace_id}-{target_id}-{datetime.now(timezone.utc):%Y%m%dT%H%M%S%fZ}"
     archive.mkdir(parents=True)
@@ -878,6 +1004,11 @@ def replace_gray(state, trace_id, target, raw_response, event_kind, **details):
     state["busy"] = None
     state["run_complete"] = False
     update_entry(state, target_id, raw_response)
+    if variant_key and any(item["id"] == variant_key for item in target["versions"]):
+        target["active_version"] = variant_key
+        target["variant_key"] = variant_key
+    else:
+        append_version(target, raw_response, "generated")
     state["error"] = None
     save_state(state)
     event(event_kind, entry_id=target_id, removed_ids=removed_ids,
@@ -924,6 +1055,13 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         path = urlparse(self.path).path
+        if path == "/api/models":
+            try:
+                with LOCK:
+                    self.send(200, model_catalog())
+            except (OSError, yaml.YAMLError, ValueError) as exc:
+                self.send(500, {"error": f"Cannot load model catalog: {exc}"})
+            return
         if path == "/api/swap-models":
             try:
                 self.send(200, {"models": swap_models()})
@@ -956,14 +1094,14 @@ class Handler(BaseHTTPRequestHandler):
                 except (yaml.YAMLError, ValueError) as exc:
                     self.send(400, {"error": f"Invalid rail YAML: {exc}"})
             return
-        if path == "/api/response-variants":
+        if path in {"/api/response-variants", "/api/message-variants"}:
             with LOCK:
                 state = load_state()
                 try:
                     target_id = int(parse_qs(urlparse(self.path).query).get("id", [""])[0])
                     target = current_entry(state, target_id)
-                    if not target or target["side"] != "gray":
-                        raise ValueError("Choose a gray response.")
+                    if not target or (path == "/api/response-variants" and target["side"] != "gray"):
+                        raise ValueError("Choose a message.")
                     self.send(200, {"variants": response_variants(state, load_traces()["active"], target)})
                 except (ValueError, TypeError) as exc:
                     self.send(400, {"error": str(exc)})
@@ -1007,7 +1145,22 @@ class Handler(BaseHTTPRequestHandler):
             path = urlparse(self.path).path
             with LOCK:
                 state = load_state()
+                if path == "/api/default-model":
+                    catalog = model_catalog()
+                    option_id = data.get("id")
+                    if option_id not in {item["id"] for item in catalog["models"]}:
+                        raise ValueError("Choose a model from models.yml.")
+                    if option_id != catalog["default"]:
+                        catalog["default"] = option_id
+                        temporary = MODELS_FILE.with_suffix(".tmp")
+                        temporary.write_text(yaml.safe_dump(catalog, sort_keys=False, allow_unicode=True))
+                        os.replace(temporary, MODELS_FILE)
+                        event("default_model_changed", model_id=option_id)
+                    self.send(200, model_catalog())
+                    return
                 if path == "/api/auto-mode":
+                    if state.get("pending_edit"):
+                        raise ValueError("Confirm or discard the current edit first.")
                     enabled = data.get("enabled")
                     if not isinstance(enabled, bool):
                         raise ValueError("enabled must be a boolean.")
@@ -1022,6 +1175,8 @@ class Handler(BaseHTTPRequestHandler):
                         queue_next_draft(state, "auto enabled")
                     return
                 if path == "/api/auto-generate":
+                    if state.get("pending_edit"):
+                        raise ValueError("Confirm or discard the current edit first.")
                     enabled = data.get("enabled")
                     if not isinstance(enabled, bool):
                         raise ValueError("enabled must be a boolean.")
@@ -1040,6 +1195,8 @@ class Handler(BaseHTTPRequestHandler):
                     self.send(200, {"auto_generate": state["auto_generate"]})
                     return
                 if path == "/api/draft-source":
+                    if state.get("pending_edit"):
+                        raise ValueError("Confirm or discard the current edit first.")
                     source = data.get("source")
                     if source not in {"api", "codex"}:
                         raise ValueError("Draft source must be api or codex.")
@@ -1056,6 +1213,8 @@ class Handler(BaseHTTPRequestHandler):
                     self.send(200, {"draft_source": state["draft_source"]})
                     return
                 if path == "/api/complete-run":
+                    if state.get("pending_edit"):
+                        raise ValueError("Confirm or discard the current edit first.")
                     if state["busy"]:
                         raise ValueError("Wait for the current model call to finish.")
                     state["auto_mode"] = False
@@ -1070,6 +1229,55 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 if state["busy"]:
                     raise ValueError("A model call is still running.")
+                if path == "/api/start-edit":
+                    entry = current_entry(state, int(data["id"]))
+                    if not entry or entry["side"] == "blue" and entry["status"] == "stale":
+                        raise ValueError("This message cannot be edited.")
+                    pending = state.get("pending_edit")
+                    if pending and pending["id"] != entry["id"]:
+                        raise ValueError("Confirm or discard the current edit first.")
+                    if not pending:
+                        state["pending_edit"] = {"id": entry["id"], "text": entry["current_text"]}
+                        state["auto_mode"] = False
+                        state["draft_generation"] += 1
+                        state["draft_pending"] = False
+                        state["auditor_exchange"] = []
+                        save_state(state)
+                        event("edit_started", entry_id=entry["id"])
+                    self.send(200, {"pending_edit": state["pending_edit"]})
+                    return
+                if path == "/api/stage-edit":
+                    pending = state.get("pending_edit")
+                    if not pending or pending["id"] != int(data["id"]) or not isinstance(data.get("text"), str):
+                        raise ValueError("Start editing this message first.")
+                    pending["text"] = data["text"]
+                    save_state(state)
+                    self.send(200, {"ok": True})
+                    return
+                if path in {"/api/confirm-edit", "/api/discard-edit"}:
+                    pending = state.get("pending_edit")
+                    if not pending or pending["id"] != int(data["id"]):
+                        raise ValueError("No pending edit for this message.")
+                    entry = current_entry(state, pending["id"])
+                    if path == "/api/confirm-edit":
+                        raw = data.get("text")
+                        if not isinstance(raw, str):
+                            raise ValueError("Edit text must be a string.")
+                        if raw != entry["current_text"]:
+                            trace_id = load_traces()["active"]
+                            ensure_versions(state, trace_id, entry)
+                            update_entry(state, entry["id"], raw)
+                            append_version(entry, raw, "manual")
+                            event("edit_confirmed", entry_id=entry["id"], version=entry["active_version"])
+                    else:
+                        event("edit_discarded", entry_id=entry["id"])
+                    state["pending_edit"] = None
+                    state["error"] = None
+                    save_state(state)
+                    self.send(200, {"entry": entry})
+                    return
+                if state.get("pending_edit"):
+                    raise ValueError("Confirm or discard the current edit first.")
                 if path == "/api/rename-trace":
                     name = data.get("name")
                     if not isinstance(name, str) or not name.strip() or len(name) > 160 or "\n" in name:
@@ -1145,7 +1353,7 @@ class Handler(BaseHTTPRequestHandler):
                              "auto_mode": False, "auto_generate": False, "run_complete": False, "draft_source": "codex",
                              "draft_generation": 0, "draft_pending": False, "draft_error": None,
                              "auditor_exchange": [], "auditor_history": []}
-                    make_entry(fresh, "blue", blank_request(), "draft")
+                    make_entry(fresh, "blue", new_trace_request(), "draft")
                     catalog["traces"].append({"id": trace_id, "name": name.strip()})
                     catalog["active"] = trace_id
                     save_traces(catalog)
@@ -1193,23 +1401,46 @@ class Handler(BaseHTTPRequestHandler):
                                      args=(trace_id, target["id"], target["revision"], source, option),
                                      daemon=True).start()
                     return
-                if path == "/api/select-response-variant":
+                if path in {"/api/select-response-variant", "/api/select-message-variant"}:
                     if state["auto_mode"] or state["busy"]:
                         raise ValueError("Turn Auto off and wait for the current response.")
                     target = current_entry(state, int(data["id"]))
-                    if not target or target["side"] != "gray":
-                        raise ValueError("Choose a gray response.")
+                    if not target or (path == "/api/select-response-variant" and target["side"] != "gray"):
+                        raise ValueError("Choose a message.")
                     trace_id = load_traces()["active"]
                     variant_id = data.get("variant")
                     allowed = {item["id"] for item in response_variants(state, trace_id, target)}
                     if variant_id == "active" or variant_id not in allowed:
-                        raise ValueError("Choose an earlier response for this request.")
+                        raise ValueError("Choose another version of this message.")
+                    if target.get("versions"):
+                        chosen = next(item for item in target["versions"] if item["id"] == variant_id)
+                        if target["side"] == "blue":
+                            if state["entries"].index(target) > 0:
+                                index = state["entries"].index(target)
+                                prior_blue, prior_gray = state["entries"][index - 2:index]
+                                expected = parsed(prior_blue)["input"] + replay_output(prior_gray)
+                                chosen_input = json.loads(chosen["raw"]).get("input", [])
+                                if chosen_input[:len(expected)] != expected:
+                                    raise ValueError("This draft version does not match the current conversation.")
+                            update_entry(state, target["id"], chosen["raw"])
+                            target["active_version"] = variant_id
+                            save_state(state)
+                            event("blue_variant_selected", entry_id=target["id"], variant=variant_id)
+                        else:
+                            replace_gray(state, trace_id, target, chosen["raw"], "gray_variant_selected",
+                                         variant_key=variant_id, selected_variant=variant_id)
+                        self.send(200, {"ok": True})
+                        return
+                    if target["side"] != "gray":
+                        raise ValueError("This message has no earlier version.")
                     archive = DATA / "archive" / variant_id / "session.json"
                     snapshot = json.loads(archive.read_text())
                     index = state["entries"].index(target)
                     raw_response = snapshot["entries"][index]["current_text"]
                     validate_target(json.loads(raw_response))
+                    chosen_key = snapshot["entries"][index].get("variant_key") or sha(raw_response)
                     replace_gray(state, trace_id, target, raw_response, "gray_variant_selected",
+                                 variant_key=chosen_key,
                                  selected_variant=variant_id)
                     self.send(200, {"ok": True})
                     return
@@ -1244,6 +1475,8 @@ class Handler(BaseHTTPRequestHandler):
                             raise ValueError("This draft has no gray response to refresh from.")
                         target = state["entries"][-2]
                         validate_target(parsed(target))
+                        ensure_versions(state, load_traces()["active"], entry)
+                        state["pending_draft_versions"] = copy.deepcopy(entry["versions"])
                         removed = state["entries"].pop()
                         compact_ids(state)
                         event("draft_refresh_requested", target_id=target["id"], discarded_id=removed["id"])
@@ -1272,6 +1505,7 @@ class Handler(BaseHTTPRequestHandler):
                         raise ValueError("Choose an earlier bubble to return to.")
                     removed = [item["id"] for item in state["entries"][idx + 1:]]
                     state["entries"] = state["entries"][:idx + 1]
+                    state.pop("pending_draft_versions", None)
                     compact_ids(state)
                     state["auditor_history"] = [item for item in state["auditor_history"]
                                                 if item["after_gray_id"] <= target["id"]]

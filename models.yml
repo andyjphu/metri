@@ -1,0 +1,27 @@
+default: sol-daybreak
+models:
+  - id: sol-daybreak
+    label: GPT-6 Sol · Daybreak Blue
+    description: 'daybreak_blue: enabled'
+    provider: openai
+    model: gpt-6-sol
+    access_programs:
+      cyber: daybreak_blue
+    max_output_tokens: 3000
+    swap: false
+  - id: glm-high
+    label: OpenRouter GLM-5.3 · High
+    description: OpenRouter · High
+    provider: openrouter
+    model: z-ai/glm-5.3
+    reasoning_effort: high
+    max_output_tokens: 12000
+    swap: true
+  - id: sol-high
+    label: GPT-6 Sol · High
+    description: OpenAI · High
+    provider: openai
+    model: gpt-6-sol
+    reasoning_effort: high
+    max_output_tokens: 12000
+    swap: true

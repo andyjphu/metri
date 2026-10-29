@@ -11,6 +11,7 @@
   const collapseKey = (traceId) => `metri:collapse:v1:${traceId}`;
   const scrollKey = (traceId) => `metri:scroll:v1:${traceId}`;
   const swapModelKey = "metri:swap-model:v1";
+  const defaultModelKey = "metri:default-model:v1";
   function storedValue(key) {
     try {
       const current = localStorage.getItem(key);
@@ -33,6 +34,7 @@
   let previewFrame = null;
   let saveError = false;
   let traces = null;
+  let modelCatalog = null;
   let switchingTrace = false;
   let changingAuto = false;
   let changingDraftSource = false;
@@ -52,6 +54,7 @@
   const swapIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h16m-4-4 4 4-4 4M20 16H4m4-4-4 4 4 4"/></svg>';
   const searchIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.8" cy="10.8" r="6.3"/><path d="m16 16 4.2 4.2"/></svg>';
   const approveIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 4.5 4.5L19 7"/></svg>';
+  const discardIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6 18 18M18 6 6 18"/></svg>';
   const collapseIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>';
 
   function syncViewMode() {
@@ -266,26 +269,27 @@
     const status = state?.busy ? "Sending..." :
       saveError ? "Save failed" :
       saving.size ? "Saving..." :
+      state?.pending_edit ? "Edit pending" :
       edits.size ? "Unsaved edits" :
       state?.error ? "Send failed" :
       Number.isFinite(elapsed) ? `Saved ${age} ago` : "Saved locally";
     $("#save-status").textContent = status;
   }
 
-  function updateStatusIndicators() {
-    const blue = [...(state?.entries || [])].reverse().find((entry) => entry.side === "blue");
-    let request;
-    try { request = JSON.parse(edits.get(blue?.id) ?? blue?.current_text); }
-    catch {
-      try { request = JSON.parse(blue?.current_text); }
-      catch { request = null; }
-    }
-    const model = typeof request?.model === "string" ? request.model : "";
-    const program = typeof request?.access_programs?.cyber === "string" ? request.access_programs.cyber : "";
-    $("#status-model").textContent = model;
-    $("#status-model").title = model;
-    $("#status-program").textContent = program ? `${program}: enabled` : "";
-    $("#status-program-row").hidden = !program;
+  function renderModelCatalog() {
+    if (!modelCatalog) return;
+    $("#default-model-options").innerHTML = modelCatalog.models.map((option) =>
+      `<button class="default-model-option" type="button" data-model-id="${escapeHtml(option.id)}" aria-pressed="${option.id === modelCatalog.default}"><span>${escapeHtml(option.model)}</span><small>${escapeHtml(option.description)}</small></button>`
+    ).join("");
+  }
+
+  async function loadModelCatalog() {
+    const response = await fetch("/api/models", {cache: "no-store"});
+    const result = await response.json();
+    if (!response.ok) throw Error(result.error || "Could not load models.");
+    modelCatalog = result;
+    storeValue(defaultModelKey, result.default);
+    renderModelCatalog();
   }
 
   function updateAutoMode() {
@@ -500,9 +504,8 @@
   }
 
   async function finishEdits() {
-    for (const id of [...edits.keys()]) await saveEdit(id);
-    await Promise.all([...saving.values()]);
-    if (edits.size || saveError) throw Error("Finish saving edits before continuing.");
+    if (state?.pending_edit || edits.size) throw Error("Confirm or discard the edit first.");
+    if (saveError) throw Error("Finish saving edits before continuing.");
   }
 
   async function selectTrace(id) {
@@ -575,7 +578,6 @@
     if (messageSearch && !entries.some((entry) => entry.id === messageSearch.id)) messageSearch = null;
     showNotice(state.error || "", !!state.error);
     updateSaveStatus();
-    updateStatusIndicators();
     updateAutoMode();
     updateDraftSource();
     updateAutoGenerate();
@@ -586,15 +588,18 @@
       const desc = description(entry);
       const editable = isEditable(entry);
       const editing = editable && viewMode === "rendered" && renderedEditors.has(entry.id);
-      const controls = entry.side === "blue" && ["draft", "stale"].includes(entry.status) ?
-        `${entry.status === "draft" && !state.busy && sendingId !== entry.id ? button(approveIcon, "Approve and send", "approve", "approve") : ""}${index > 0 ? button(refreshIcon, "Refresh blue draft", "refresh-draft", "refresh-draft") : ""}` :
-        entry === last && entry.side === "gray" ? button(refreshIcon, "Refresh blue draft", "refresh-draft", "refresh-draft") :
-        index < entries.length - 1 ? button(rewindIcon, "Delete later messages and return here", "rewind") : "";
-      const pen = !state.busy && (entry.side === "gray" || entry.status !== "stale") ?
-        button(pencil, renderedEditors.has(entry.id) ? "Done editing" : "Edit message", "edit", "edit") : "";
+      const pending = state.pending_edit?.id === entry.id;
+      const blocked = Boolean(state.pending_edit);
+      const controls = pending ? `${button(approveIcon, "Confirm edit", "confirm-edit", "approve")}${button(discardIcon, "Discard edit", "discard-edit")}` : blocked ? "" :
+        entry.side === "blue" && ["draft", "stale"].includes(entry.status) ?
+          `${entry.status === "draft" && !state.busy && sendingId !== entry.id ? button(approveIcon, "Approve and send", "approve", "approve") : ""}${index > 0 ? button(refreshIcon, "Refresh blue draft", "refresh-draft", "refresh-draft") : ""}` :
+          entry === last && entry.side === "gray" ? button(refreshIcon, "Refresh blue draft", "refresh-draft", "refresh-draft") :
+          index < entries.length - 1 ? button(rewindIcon, "Delete later messages and return here", "rewind") : "";
+      const pen = !blocked && !state.busy && (entry.side === "gray" || entry.status !== "stale") ?
+        button(pencil, "Edit message", "edit", "edit") : "";
       const caret = `<button class="collapse" type="button" title="${collapsed ? "Expand" : "Collapse"} bubble" aria-label="${collapsed ? "Expand" : "Collapse"} bubble" aria-expanded="${!collapsed}" data-action="collapse">${collapseIcon}</button>`;
-      const swappable = entry.side === "gray" && !state.busy && !state.auto_mode;
-      const swap = swappable ? button(swapIcon, "Replace response with another model", "swap-model") : "";
+      const swappable = !blocked && !state.busy && !state.auto_mode;
+      const swap = swappable ? button(swapIcon, "Message versions", "swap-model") : "";
       const find = button(searchIcon, "Find in this message", "search-message");
       const taps = `<div class="tapback"><div class="tapback-extra">${controls}${swap}${find}${pen}</div>${caret}</div>`;
       const searchBar = messageSearch?.id === entry.id ?
@@ -605,7 +610,7 @@
       const cached = previewCache.get(entry.id);
       const preview = cached?.revision === entry.revision ? cached.text : desc;
       const railKind = entry.side === "gray" ? (desc.startsWith("Tool call") ? "agent-tool" : "agent-text") : "";
-      const message = `<article class="message ${entry.side} ${railKind} ${collapsed ? "collapsed" : ""} ${entry.id === selected ? "selected" : ""} ${editing ? "editing" : ""}" id="m-${entry.id}" data-id="${entry.id}">
+      const message = `<article class="message ${entry.side} ${railKind} ${collapsed ? "collapsed" : ""} ${entry.id === selected ? "selected" : ""} ${editing ? "editing" : ""} ${pending ? "pending-edit" : ""}" id="m-${entry.id}" data-id="${entry.id}">
         <div class="message-head">#${index + 1} · ${escapeHtml(desc)}</div>
         <div class="bubble">${taps}${searchBar}<div class="collapsed-preview ${viewMode}">${escapeHtml(preview)}</div><div class="expanded-content">${viewMode === "raw" ? `<textarea class="raw-editor" spellcheck="false" aria-label="${escapeHtml(label(entry))} JSON" data-id="${entry.id}" ${editable ? "" : "readonly"}></textarea>` : `<div class="message-text ${viewMode}" data-id="${entry.id}"></div>${editors}`}</div></div>
       </article>`;
@@ -619,7 +624,7 @@
       return message + swapping + auditor;
     }).join("") + (state.busy?.kind === "swap" || state.run_complete ? "" : state.busy?.kind === "target" ?
       `<article class="message gray pending"><div class="bubble"><span class="pending-text">Pending response from provider.</span></div></article>` :
-      last?.side === "gray" ?
+      last?.side === "gray" && !state.pending_edit ?
         state.auto_generate === false && !state.draft_pending ?
           `<article class="message blue draft-add"><button type="button" data-action="refresh-draft" aria-label="Generate next request" title="Generate next request">+</button></article>` :
         state.draft_source === "api" ?
@@ -669,8 +674,12 @@
     try {
       const response = await fetch(stateUrl, {cache: "no-store"});
       const next = await response.json();
-      const signature = JSON.stringify(next.entries.map((e) => [e.id, e.revision, e.status])) + JSON.stringify(next.busy) + next.error + next.auto_mode + next.auto_generate + next.run_complete + next.draft_source + next.draft_pending + next.draft_error + JSON.stringify(next.auditor_exchange) + JSON.stringify(next.auditor_history);
+      const signature = JSON.stringify(next.entries.map((e) => [e.id, e.revision, e.status])) + JSON.stringify(next.busy) + next.error + next.auto_mode + next.auto_generate + next.run_complete + next.draft_source + next.draft_pending + next.draft_error + JSON.stringify(next.pending_edit) + JSON.stringify(next.auditor_exchange) + JSON.stringify(next.auditor_history);
       state = next;
+      if (next.pending_edit && !edits.has(next.pending_edit.id)) {
+        edits.set(next.pending_edit.id, next.pending_edit.text);
+        renderedEditors.add(next.pending_edit.id);
+      }
       updateAutoMode();
       updateDraftSource();
       updateAutoGenerate();
@@ -819,23 +828,31 @@
     clearTimeout(timers.get(id));
     timers.delete(id);
     if (saving.has(id)) await saving.get(id);
-    if (!edits.has(id)) return;
+    if (!edits.has(id) || state?.pending_edit?.id !== id) return;
     const raw = edits.get(id);
-    const entry = state.entries.find((x) => x.id === id);
-    if (!entry || entry.current_text === raw) { edits.delete(id); updateSaveStatus(); return; }
     try {
-      const work = api("/api/edit", {id, text: raw});
+      const work = api("/api/stage-edit", {id, text: raw});
       saving.set(id, work);
       updateSaveStatus();
       await work;
-      if (edits.get(id) === raw) edits.delete(id);
       saveError = false;
-      await refresh(true, true);
     } catch (error) {
       saveError = true;
       showNotice(error.message, true);
       throw error;
     } finally { saving.delete(id); updateSaveStatus(); }
+  }
+
+  function confirmRewind(number, count) {
+    const dialog = $("#rewind-dialog");
+    $("#rewind-title").textContent = `Return to #${number}?`;
+    $("#rewind-detail").textContent = `Delete ${count} later message${count === 1 ? "" : "s"}.`;
+    $("#rewind-confirm").textContent = count === 1 ? "Delete message" : "Delete messages";
+    dialog.returnValue = "";
+    return new Promise((resolve) => {
+      dialog.addEventListener("close", () => resolve(dialog.returnValue === "rewind"), {once: true});
+      dialog.showModal();
+    });
   }
 
   async function action(name, id) {
@@ -862,7 +879,7 @@
         await refresh(true, true);
         return;
       } else if (name === "collapse") {
-        await saveEdit(id);
+        if (state.pending_edit?.id === id) await saveEdit(id);
         const entry = state.entries.find((item) => item.id === id);
         if (!entry) return;
         const collapsed = !isCollapsed(entry);
@@ -871,20 +888,15 @@
         keepMessageTop(id, () => setCollapsedDom(entry, collapsed));
         return;
       } else if (name === "edit") {
+        await api("/api/start-edit", {id});
+        state.pending_edit = {id, text: state.entries.find((entry) => entry.id === id).current_text};
+        edits.set(id, state.pending_edit.text);
         if (isCollapsed(state.entries.find((item) => item.id === id))) {
           collapseOverrides.set(id, false);
           saveCollapsePreferences();
         }
-        if (renderedEditors.has(id)) {
-          await saveEdit(id);
-          renderedEditors.delete(id);
-        } else {
-          for (const openId of [...renderedEditors]) {
-            await saveEdit(openId);
-            renderedEditors.delete(openId);
-          }
-          renderedEditors.add(id);
-        }
+        renderedEditors.clear();
+        renderedEditors.add(id);
         if (viewMode === "cleaned") {
           viewMode = "rendered";
           storeValue(viewModeKey, viewMode);
@@ -893,30 +905,36 @@
         await refresh(true, true);
         if (renderedEditors.has(id)) $(`#m-${id} textarea`)?.focus({preventScroll: true});
         return;
+      } else if (name === "confirm-edit" || name === "discard-edit") {
+        if (name === "confirm-edit") {
+          await saveEdit(id);
+          await api("/api/confirm-edit", {id, text: edits.get(id) ?? state.pending_edit.text});
+        } else {
+          await api("/api/discard-edit", {id});
+        }
+        edits.delete(id);
+        state.pending_edit = null;
+        renderedEditors.delete(id);
+        await refresh(true, true);
+        return;
       } else if (name === "refresh-draft") {
-        for (const editedId of [...edits.keys()]) {
-          if (editedId !== id || last.side !== "blue") await saveEdit(editedId);
-        }
-        if (last.side === "blue") {
-          clearTimeout(timers.get(id));
-          timers.delete(id);
-          edits.delete(id);
-        }
-        await Promise.allSettled([...saving.values()]);
+        await finishEdits();
         await api("/api/refresh-draft", {id});
         renderedEditors.delete(id);
         saveError = false;
         await refresh(true, true);
         return;
       } else if (name === "swap-model") {
+        await finishEdits();
         const index = state.entries.findIndex((entry) => entry.id === id);
         if (index < 0) return;
+        const gray = state.entries[index].side === "gray";
         const [modelResponse, variantResponse] = await Promise.all([
-          fetch("/api/swap-models", {cache: "no-store"}),
-          fetch(`/api/response-variants?id=${id}`, {cache: "no-store"})
+          gray ? fetch("/api/swap-models", {cache: "no-store"}) : Promise.resolve(null),
+          fetch(`/api/message-variants?id=${id}`, {cache: "no-store"})
         ]);
-        const [modelResult, variantResult] = await Promise.all([modelResponse.json(), variantResponse.json()]);
-        if (!modelResponse.ok) throw Error(modelResult.error || "Could not load model choices.");
+        const [modelResult, variantResult] = await Promise.all([modelResponse ? modelResponse.json() : Promise.resolve({models: []}), variantResponse.json()]);
+        if (modelResponse && !modelResponse.ok) throw Error(modelResult.error || "Could not load model choices.");
         if (!variantResponse.ok) throw Error(variantResult.error || "Could not load earlier responses.");
         const saved = storedValue(swapModelKey);
         const selectedOption = modelResult.models.some((option) => option.id === saved) ? saved : modelResult.models[0]?.id;
@@ -924,26 +942,29 @@
           `<label class="swap-option"><input type="radio" name="swap-option" value="${escapeHtml(option.id)}" ${option.id === selectedOption ? "checked" : ""}><span>${escapeHtml(option.label)}</span></label>`
         ).join("");
         $("#swap-variants").innerHTML = variantResult.variants.map((variant) => {
-          const when = variant.created_at ? new Date(variant.created_at * 1000).toLocaleString() : "";
-          return `<label class="swap-option"><input type="radio" name="swap-variant" value="${escapeHtml(variant.id)}" ${variant.active ? "checked" : ""}><span>${escapeHtml(variant.model)}</span>${when ? `<small>${escapeHtml(when)}</small>` : ""}</label>`;
+          const when = variant.created_at ? new Date(typeof variant.created_at === "number" ? variant.created_at * 1000 : variant.created_at).toLocaleString() : "";
+          const detail = variant.kind === "manual" ? `Manual edit of ${variant.model}` : when;
+          return `<label class="swap-option"><input type="radio" name="swap-variant" value="${escapeHtml(variant.id)}" ${variant.active ? "checked" : ""}><span>#${variant.number} · ${escapeHtml(variant.model)}</span>${detail ? `<small>${escapeHtml(detail)}</small>` : ""}</label>`;
         }).join("");
         const dialog = $("#swap-dialog");
         dialog.dataset.id = id;
+        dialog.dataset.side = gray ? "gray" : "blue";
         dialog.dataset.mode = "existing";
-        $("#swap-title").textContent = "Replace response";
+        $("#swap-title").textContent = "Message versions";
+        $("#swap-new").hidden = !gray;
         $("#swap-existing").hidden = false;
         $("#swap-generate").hidden = true;
-        $("#swap-submit").textContent = "Use response";
+        $("#swap-submit").textContent = "Use version";
         $("#swap-submit").disabled = true;
         $("#swap-error").hidden = true;
         dialog.showModal();
         return;
       } else if (name === "rewind") {
+        await finishEdits();
         const index = state.entries.findIndex((entry) => entry.id === id);
         if (index < 0 || index === state.entries.length - 1) return;
         const count = state.entries.length - index - 1;
-        const detail = state.entries[index].side === "blue" ? " The selected request will become a draft again." : "";
-        if (!confirm(`Delete ${count} later message${count === 1 ? "" : "s"} and return to #${index + 1}?${detail}`)) return;
+        if (!await confirmRewind(index + 1, count)) return;
         timers.forEach(clearTimeout);
         timers.clear();
         await Promise.allSettled([...saving.values()]);
@@ -952,21 +973,12 @@
         renderedEditors.clear();
         saveError = false;
       } else if (name === "approve") {
-        if ((edits.size || saving.size || timers.size) &&
-            !confirm("Edits are not saved locally yet. Finish saving, then send the current blue JSON?")) return;
+        await finishEdits();
         sendingId = last.id;
         $(`#m-${last.id} [data-action=approve]`)?.remove();
-        clearTimeout(timers.get(last.id));
-        timers.delete(last.id);
-        if (saving.has(last.id)) await saving.get(last.id);
-        const hadEarlierEdits = [...edits.keys()].some((editedId) => editedId !== last.id);
-        for (const editedId of [...edits.keys()]) {
-          if (editedId !== last.id) await saveEdit(editedId);
-        }
-        if (hadEarlierEdits) throw Error("Earlier edits changed the draft. Review it before sending.");
         if (state.entries.at(-1)?.id !== last.id || state.entries.at(-1)?.status !== "draft")
           throw Error("The agent response changed. Review a new draft before sending.");
-        const draftText = edits.get(last.id) ?? state.entries.at(-1).current_text;
+        const draftText = state.entries.at(-1).current_text;
         await api("/api/approve", {id: last.id, text: draftText});
         sendingId = null;
         edits.delete(last.id);
@@ -1016,7 +1028,6 @@
     }
     saveError = false;
     updateSaveStatus();
-    updateStatusIndicators();
     if (id === state.entries[0]?.id) renderRequestContext();
     clearTimeout(timers.get(id));
     timers.set(id, setTimeout(() => saveEdit(id).catch(() => {}), 900));
@@ -1054,10 +1065,10 @@
   });
   $("#swap-back").addEventListener("click", () => {
     $("#swap-dialog").dataset.mode = "existing";
-    $("#swap-title").textContent = "Replace response";
+    $("#swap-title").textContent = "Message versions";
     $("#swap-existing").hidden = false;
     $("#swap-generate").hidden = true;
-    $("#swap-submit").textContent = "Use response";
+    $("#swap-submit").textContent = "Use version";
     $("#swap-submit").disabled = $("#swap-variants input:checked")?.value === "active";
     $("#swap-variants input:checked")?.focus();
   });
@@ -1081,8 +1092,8 @@
         await api("/api/swap-model", {id: Number(dialog.dataset.id), option});
         storeValue(swapModelKey, option);
       } else {
-        if (!variant || variant === "active") throw Error("Choose an earlier response.");
-        await api("/api/select-response-variant", {id: Number(dialog.dataset.id), variant});
+        if (!variant || variant === "active") throw Error("Choose another version.");
+        await api("/api/select-message-variant", {id: Number(dialog.dataset.id), variant});
       }
       selected = Number(dialog.dataset.id);
       dialog.close();
@@ -1175,11 +1186,31 @@
   });
   const settingsButton = $("#settings-button");
   const settingsPanel = $("#settings-panel");
+  $("#default-model-options").addEventListener("click", async (event) => {
+    const choice = event.target.closest("[data-model-id]");
+    if (!choice || choice.dataset.modelId === modelCatalog?.default) return;
+    const buttons = $("#default-model-options").querySelectorAll("button");
+    buttons.forEach((button) => { button.disabled = true; });
+    try {
+      modelCatalog = await api("/api/default-model", {id: choice.dataset.modelId});
+      storeValue(defaultModelKey, modelCatalog.default);
+      renderModelCatalog();
+    } catch (error) {
+      showNotice(error.message, true);
+      await loadModelCatalog().catch(() => {});
+    } finally {
+      $("#default-model-options").querySelectorAll("button").forEach((button) => { button.disabled = false; });
+    }
+  });
   function setSettingsOpen(open) {
     settingsPanel.hidden = !open;
     settingsButton.setAttribute("aria-expanded", String(open));
   }
-  settingsButton.addEventListener("click", () => setSettingsOpen(settingsPanel.hidden));
+  settingsButton.addEventListener("click", () => {
+    const opening = settingsPanel.hidden;
+    setSettingsOpen(opening);
+    if (opening) loadModelCatalog().catch((error) => showNotice(error.message, true));
+  });
   document.addEventListener("pointerdown", (event) => {
     if (!settingsPanel.hidden && !event.target.closest(".settings-wrap")) setSettingsOpen(false);
   });
@@ -1231,6 +1262,7 @@
   });
   syncViewMode();
   loadTraces().then(async () => {
+    await loadModelCatalog().catch((error) => showNotice(error.message, true));
     loadCollapsePreferences(traces.active);
     await loadRailPoints();
     await refresh(true);

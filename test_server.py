@@ -18,11 +18,14 @@ from metri import server
 class MetriTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
-        self.original = (server.DATA, server.STATE_FILE, server.EVENTS_FILE, server.call_api,
-                         server.call_swap_model, server.CODEX_THREAD_ID)
+        self.original = (server.DATA, server.STATE_FILE, server.EVENTS_FILE, server.MODELS_FILE,
+                         server.call_api, server.call_swap_model, server.CODEX_THREAD_ID)
         server.DATA = Path(self.tmp.name)
         server.STATE_FILE = server.DATA / "session.json"
         server.EVENTS_FILE = server.DATA / "events.jsonl"
+        model_config = server.MODELS_FILE.read_text()
+        server.MODELS_FILE = server.DATA / "models.yml"
+        server.MODELS_FILE.write_text(model_config)
         server.CODEX_THREAD_ID = None
         (server.DATA / "EXPERIMENT_CARD.md").write_text(
             "# Local test\n\n## System prompt\n\n```text\nTest instructions\n```\n\n"
@@ -53,8 +56,8 @@ class MetriTest(unittest.TestCase):
         self.http.shutdown()
         self.http.server_close()
         self.thread.join(timeout=2)
-        (server.DATA, server.STATE_FILE, server.EVENTS_FILE, server.call_api,
-         server.call_swap_model, server.CODEX_THREAD_ID) = self.original
+        (server.DATA, server.STATE_FILE, server.EVENTS_FILE, server.MODELS_FILE,
+         server.call_api, server.call_swap_model, server.CODEX_THREAD_ID) = self.original
         self.tmp.cleanup()
 
     def get(self):
@@ -64,6 +67,78 @@ class MetriTest(unittest.TestCase):
     def get_traces(self):
         with urllib.request.urlopen(self.base + "/api/traces") as reply:
             return json.load(reply)
+
+    def variants(self, entry_id):
+        with urllib.request.urlopen(self.base + f"/api/message-variants?id={entry_id}") as reply:
+            return json.load(reply)["variants"]
+
+    def test_blue_edit_requires_confirmation_and_creates_selectable_version(self):
+        original = self.get()["entries"][0]["current_text"]
+        changed = json.loads(original)
+        changed["input"][0]["content"] = "Edited request"
+        raw = json.dumps(changed)
+        self.post("start-edit", {"id": 1})
+        self.post("stage-edit", {"id": 1, "text": raw})
+        self.assertEqual(self.get()["entries"][0]["current_text"], original)
+        for action, data in [("approve", {"id": 1}), ("refresh-draft", {"id": 1}),
+                             ("new-trace", {"id": "another", "name": "Another"})]:
+            with self.assertRaises(urllib.error.HTTPError) as error:
+                self.post(action, data)
+            self.assertEqual(error.exception.code, 400)
+            error.exception.close()
+        self.post("confirm-edit", {"id": 1, "text": raw})
+        self.assertEqual(self.get()["entries"][0]["current_text"], raw)
+        versions = self.variants(1)
+        self.assertEqual([item["number"] for item in versions], [1, 2])
+        self.assertEqual(versions[1]["kind"], "manual")
+        self.assertEqual(versions[1]["model"], "test-model")
+        self.post("select-message-variant", {"id": 1, "variant": versions[0]["id"]})
+        self.assertEqual(self.get()["entries"][0]["current_text"], original)
+        self.assertEqual([item["number"] for item in self.variants(1)], [1, 2])
+
+    def test_gray_edit_can_be_discarded_or_confirmed_as_version(self):
+        first = json.loads(self.get()["entries"][0]["current_text"])
+        first["input"][0]["content"] = "Run the test"
+        self.post("approve", {"id": 1, "text": json.dumps(first)})
+        self.await_idle()
+        original = self.get()["entries"][1]["current_text"]
+        changed = json.loads(original)
+        changed["output"][1]["name"] = "read"
+        raw = json.dumps(changed)
+        self.post("start-edit", {"id": 2})
+        self.post("stage-edit", {"id": 2, "text": raw})
+        self.post("discard-edit", {"id": 2})
+        self.assertEqual(self.get()["entries"][1]["current_text"], original)
+        self.post("start-edit", {"id": 2})
+        self.post("confirm-edit", {"id": 2, "text": raw})
+        self.assertEqual(self.get()["entries"][1]["current_text"], raw)
+        versions = self.variants(2)
+        self.assertEqual([item["kind"] for item in versions], ["generated", "manual"])
+        self.post("select-message-variant", {"id": 2, "variant": versions[0]["id"]})
+        self.assertEqual(self.get()["entries"][1]["current_text"], original)
+        self.assertEqual([item["number"] for item in self.variants(2)], [1, 2])
+
+    def test_refreshed_blue_drafts_keep_generation_numbers(self):
+        first = json.loads(self.get()["entries"][0]["current_text"])
+        first["input"][0]["content"] = "Run the test"
+        self.post("approve", {"id": 1, "text": json.dumps(first)})
+        self.await_idle()
+        gray = self.get()["entries"][-1]
+        base = copy.deepcopy(first)
+        base["input"] += json.loads(gray["current_text"])["output"]
+        draft_one = copy.deepcopy(base)
+        draft_one["input"].append({"role": "user", "content": "First draft"})
+        self.post("codex-draft", {"request": draft_one})
+        self.post("refresh-draft", {"id": 3})
+        draft_two = copy.deepcopy(base)
+        draft_two["input"].append({"role": "user", "content": "Second draft"})
+        self.post("codex-draft", {"request": draft_two})
+        self.assertEqual([item["number"] for item in self.variants(3)], [1, 2])
+        self.assertEqual(self.get()["entries"][-1]["current_text"], server.dump(draft_two))
+        earlier = self.variants(3)[0]["id"]
+        self.post("select-message-variant", {"id": 3, "variant": earlier})
+        self.assertEqual(self.get()["entries"][-1]["current_text"], server.dump(draft_one))
+        self.assertEqual([item["number"] for item in self.variants(3)], [1, 2])
 
     def test_rail_points_are_trace_specific_and_validated(self):
         with urllib.request.urlopen(self.base + "/api/rail") as reply:
@@ -110,6 +185,39 @@ class MetriTest(unittest.TestCase):
         self.assertEqual(seen[0]["reasoning"], {"effort": "high", "exclude": False})
         self.assertEqual(seen[0]["max_output_tokens"], 12000)
         self.assertNotIn("temperature", seen[0])
+
+    def test_default_model_is_saved_in_yaml_and_seeds_new_trace(self):
+        with urllib.request.urlopen(self.base + "/api/models") as reply:
+            catalog = json.load(reply)
+        self.assertEqual(catalog["default"], "sol-daybreak")
+        self.assertEqual(catalog["models"][0]["description"], "daybreak_blue: enabled")
+        changed = self.post("default-model", {"id": "glm-high"})
+        self.assertEqual(changed["default"], "glm-high")
+        self.assertEqual(server.model_catalog()["default"], "glm-high")
+        self.post("new-trace", {"id": "glm-trace", "name": "GLM trace"})
+        request = json.loads(self.get()["entries"][0]["current_text"])
+        self.assertEqual(request["model"], "z-ai/glm-5.3")
+        self.assertEqual(request["reasoning"], {"effort": "high"})
+        self.assertNotIn("access_programs", request)
+        with self.assertRaises(urllib.error.HTTPError) as error:
+            self.post("default-model", {"id": "missing"})
+        self.assertEqual(error.exception.code, 400)
+        error.exception.close()
+        self.assertEqual(server.model_catalog()["default"], "glm-high")
+
+    def test_configured_openrouter_default_routes_target_requests(self):
+        seen = []
+        def fake_openrouter(request, timeout):
+            seen.append((request.full_url, json.loads(request.data)))
+            return io.BytesIO(json.dumps({"model": "z-ai/glm-5.3", "output": [
+                {"type": "message", "role": "assistant", "content": [
+                    {"type": "output_text", "text": "Done"}]}]}).encode())
+        with mock.patch.dict("os.environ", {"OPENROUTER_API_KEY": "test-key"}), \
+                mock.patch.object(server.urllib.request, "urlopen", fake_openrouter):
+            response = server.call_target_api({"model": "z-ai/glm-5.3", "input": [], "store": False})
+        self.assertEqual(seen[0][0], server.OPENROUTER_URL)
+        self.assertEqual(seen[0][1]["model"], "z-ai/glm-5.3")
+        self.assertEqual(response["output"][0]["content"][0]["text"], "Done")
 
     def post(self, action, payload):
         req = urllib.request.Request(self.base + "/api/" + action,
@@ -176,7 +284,7 @@ class MetriTest(unittest.TestCase):
         self.assertTrue((server.DATA / "traces" / "current" / "EXPERIMENT_CARD.md").is_file())
         self.assertEqual(self.target_requests, [])
 
-    def test_new_trace_uses_log_then_card_then_blank_request(self):
+    def test_new_trace_uses_log_then_card_then_configured_default(self):
         card_request = server.default_request()
         self.assertEqual(card_request["model"], "test-model")
         self.assertEqual(card_request["instructions"], "Test instructions")
@@ -193,10 +301,10 @@ class MetriTest(unittest.TestCase):
         server.EVENTS_FILE.unlink()
         (server.DATA / "EXPERIMENT_CARD.md").unlink()
         blank_request = server.default_request()
-        self.assertEqual(blank_request["model"], "")
-        self.assertNotIn("access_programs", blank_request)
+        self.assertEqual(blank_request["model"], "gpt-6-sol")
+        self.assertEqual(blank_request["access_programs"], {"cyber": "daybreak_blue"})
         self.assertNotIn("tools", blank_request)
-        self.assertNotIn("max_output_tokens", blank_request)
+        self.assertEqual(blank_request["max_output_tokens"], 3000)
         archived = {"version": 1, "next_id": 2, "entries": [{
             "id": 1, "side": "blue", "status": "draft", "revision": 0,
             "current_text": json.dumps({**blank_request, "model": "snapshot-model"})}],
@@ -207,7 +315,7 @@ class MetriTest(unittest.TestCase):
         restored = server.load_state()
         self.assertEqual(json.loads(restored["entries"][0]["current_text"])["model"], "snapshot-model")
 
-    def test_new_trace_starts_blank_without_inheriting_prior_model(self):
+    def test_new_trace_uses_default_without_inheriting_prior_model(self):
         old = self.get()
         old_request = json.loads(old["entries"][0]["current_text"])
         self.assertEqual(old_request["model"], "test-model")
@@ -216,8 +324,8 @@ class MetriTest(unittest.TestCase):
         fresh = self.get()
         self.assertFalse(fresh["auto_generate"])
         request = json.loads(fresh["entries"][0]["current_text"])
-        self.assertEqual(request["model"], "")
-        self.assertNotIn("access_programs", request)
+        self.assertEqual(request["model"], "gpt-6-sol")
+        self.assertEqual(request["access_programs"], {"cyber": "daybreak_blue"})
         self.assertNotIn("tools", request)
         self.assertEqual(len(fresh["entries"]), 1)
         self.assertTrue((server.DATA / "traces" / "current" / "session.json").is_file())
@@ -305,15 +413,19 @@ class MetriTest(unittest.TestCase):
         with urllib.request.urlopen(self.base + f"/api/response-variants?id={gray['id']}") as reply:
             variants = json.load(reply)["variants"]
         self.assertEqual(len(variants), 2)
-        self.assertTrue(variants[0]["active"])
-        self.assertEqual(variants[1]["model"], original.get("model", "Unknown model"))
-        self.post("select-response-variant", {"id": gray["id"], "variant": variants[1]["id"]})
+        self.assertEqual([item["number"] for item in variants], [1, 2])
+        self.assertFalse(variants[0]["active"])
+        self.assertTrue(variants[1]["active"])
+        self.assertEqual(variants[0]["model"], original.get("model", "Unknown model"))
+        self.post("select-response-variant", {"id": gray["id"], "variant": variants[0]["id"]})
         restored = self.get()
         self.assertEqual(json.loads(restored["entries"][1]["current_text"])["output"], original["output"])
         self.assertEqual(len(self.target_requests), 1)
         with urllib.request.urlopen(self.base + f"/api/response-variants?id={gray['id']}") as reply:
             variants_after = json.load(reply)["variants"]
         self.assertIn("z-ai/glm-5.3", [item["model"] for item in variants_after])
+        self.assertEqual([item["number"] for item in variants_after], [1, 2])
+        self.assertTrue(variants_after[0]["active"])
 
     def test_model_swap_can_replace_earlier_gray_without_retaining_later_outputs(self):
         first = json.loads(self.get()["entries"][0]["current_text"])
@@ -733,6 +845,9 @@ class MetriTest(unittest.TestCase):
         third["input"] += json.loads(gray2["current_text"])["output"]
         third["temperature"] = .37
         blue3 = self.post("codex-draft", {"request": third})["entry"]
+        third["max_output_tokens"] = 321
+        self.post("start-edit", {"id": blue3["id"]})
+        self.post("confirm-edit", {"id": blue3["id"], "text": json.dumps(third)})
 
         edited_gray = json.loads(gray1["current_text"])
         edited_gray["output"][1]["arguments"] = '{"edited":true}'
@@ -745,6 +860,9 @@ class MetriTest(unittest.TestCase):
             self.assertEqual(request["input"][1]["arguments"], '{"edited":true}')
             self.assertEqual(request["input"][0]["content"], "Downstream wording")
         self.assertEqual(json.loads(state["entries"][4]["current_text"])["temperature"], .37)
+        active = next(item for item in state["entries"][4]["versions"]
+                      if item["id"] == state["entries"][4]["active_version"])
+        self.assertEqual(active["raw"], state["entries"][4]["current_text"])
 
         edited_first = json.loads(state["entries"][0]["current_text"])
         edited_first["input"][0]["content"] = "Revised task"
