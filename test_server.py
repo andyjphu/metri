@@ -9,6 +9,7 @@ import unittest
 import urllib.error
 import urllib.request
 from pathlib import Path
+from unittest import mock
 
 from review_room import server
 
@@ -334,7 +335,9 @@ class ReviewRoomTest(unittest.TestCase):
         response = self.await_idle()["entries"][-1]
         self.assertEqual(len(self.target_requests), 2)
 
-        self.post("rewind", {"id": gray["id"]})
+        with mock.patch.object(server, "notify_codex") as notification:
+            self.post("rewind", {"id": gray["id"], "notify": False})
+            notification.assert_not_called()
         state = self.get()
         self.assertEqual([e["id"] for e in state["entries"]], [opening["id"], gray["id"]])
         self.assertEqual(state["next_id"], 3)

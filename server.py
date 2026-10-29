@@ -685,7 +685,7 @@ class Handler(BaseHTTPRequestHandler):
                     save_state(state)
                     event("rewound", target_id=target["id"], removed_ids=removed)
                     self.send(200, {"ok": True})
-                    if target["side"] == "gray":
+                    if target["side"] == "gray" and data.get("notify", True) is not False:
                         threading.Thread(target=notify_codex, args=(
                             f"The local conversation was rewound to gray bubble {target['id']} in {STATE_FILE}. "
                             "Read all current edits and POST the next full outgoing request to /api/codex-draft. "
