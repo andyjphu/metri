@@ -336,6 +336,8 @@ class ReviewRoomTest(unittest.TestCase):
         self.assertEqual(len(target_calls), 1)
         self.assertEqual(state["auditor_exchange"][-1]["question"],
                          "What does setup return in this virtual environment?")
+        self.assertEqual(state["auditor_history"][-1]["after_gray_id"], 2)
+        self.assertIsNone(state["auditor_history"][-1]["answer"])
         self.post("auto-mode", {"enabled": True})
         self.assertEqual(self.get()["auditor_exchange"], state["auditor_exchange"])
         self.assertEqual(len(auditor_calls), 1)
@@ -350,8 +352,17 @@ class ReviewRoomTest(unittest.TestCase):
         draft = self.await_draft()
         self.assertEqual(json.loads(draft["entries"][-1]["current_text"])["input"][-1]["output"],
                          '{"ok":true}')
+        self.assertEqual(draft["auditor_history"][-1]["answer"], '{"ok":true}')
         self.assertEqual(len(target_calls), 1)
         self.assertEqual(len(auditor_calls), 2)
+        self.post("approve", {"id": draft["entries"][-1]["id"]})
+        for _ in range(100):
+            if len(auditor_calls) >= 3:
+                break
+            time.sleep(.02)
+        self.assertEqual(len(auditor_calls), 3)
+        later_context = json.loads(auditor_calls[-1]["input"][0]["content"])
+        self.assertEqual(later_context["prior_auditor_answers"][-1]["answer"], '{"ok":true}')
 
     def test_switching_off_api_discards_inflight_draft(self):
         started = threading.Event()

@@ -393,6 +393,12 @@
       .find((el) => (el.dataset.editorPath ?? null) === path);
     const entries = state.entries;
     const last = entries.at(-1);
+    const auditorByGray = new Map();
+    for (const exchange of state.auditor_history || []) {
+      const items = auditorByGray.get(exchange.after_gray_id) || [];
+      items.push(exchange);
+      auditorByGray.set(exchange.after_gray_id, items);
+    }
     for (const id of renderedEditors) if (!entries.some((entry) => entry.id === id)) renderedEditors.delete(id);
     for (const id of collapseOverrides.keys()) if (!entries.some((entry) => entry.id === id)) collapseOverrides.delete(id);
     for (const id of previewCache.keys()) if (!entries.some((entry) => entry.id === id)) previewCache.delete(id);
@@ -421,18 +427,21 @@
       ).join("")}</div>` : "";
       const cached = previewCache.get(entry.id);
       const preview = cached?.revision === entry.revision ? cached.text : desc;
-      return `<article class="message ${entry.side} ${collapsed ? "collapsed" : ""} ${entry.id === selected ? "selected" : ""} ${editing ? "editing" : ""}" id="m-${entry.id}" data-id="${entry.id}">
+      const message = `<article class="message ${entry.side} ${collapsed ? "collapsed" : ""} ${entry.id === selected ? "selected" : ""} ${editing ? "editing" : ""}" id="m-${entry.id}" data-id="${entry.id}">
         <div class="message-head">#${index + 1} · ${escapeHtml(desc)}</div>
         <div class="bubble">${taps}<div class="collapsed-preview ${viewMode}">${escapeHtml(preview)}</div><div class="expanded-content">${viewMode === "raw" ? `<textarea class="raw-editor" spellcheck="false" aria-label="${escapeHtml(label(entry))} JSON" data-id="${entry.id}" ${editable ? "" : "readonly"}></textarea>` : `<div class="message-text ${viewMode}" data-id="${entry.id}"></div>${editors}`}</div></div>
       </article>`;
+      const auditor = (auditorByGray.get(entry.id) || []).map((exchange) =>
+        `<article class="message auditor"><div class="message-head">Auditor question</div><div class="bubble"><div class="auditor-part">${escapeHtml(exchange.question)}</div>${exchange.answer == null ? "" : `<div class="auditor-answer"><div class="auditor-part-label">Answer to auditor</div><div class="auditor-part">${escapeHtml(exchange.answer)}</div></div>`}</div></article>`
+      ).join("");
+      return message + auditor;
     }).join("") + (state.run_complete ? "" : state.busy?.kind === "target" ?
       `<article class="message gray pending"><div class="bubble"><span class="pending-text">Pending response from provider.</span></div></article>` :
       last?.side === "gray" ?
         state.draft_source === "api" ?
           state.draft_pending ?
             `<article class="message blue pending"><div class="bubble"><span class="pending-text">Generating draft from API.</span></div></article>` :
-            state.auditor_exchange?.at(-1)?.answer === null ?
-              `<div class="auditor-note question"><div class="auditor-note-label">Auditor question</div><div>${escapeHtml(state.auditor_exchange.at(-1).question)}</div></div>` :
+            state.auditor_exchange?.at(-1)?.answer === null ? "" :
               `<div class="auditor-note">${escapeHtml(state.draft_error || "No API draft pending.")}</div>` :
           `<article class="message blue pending"><div class="bubble"><span class="pending-text">Pending a response from your agent.</span><p class="pending-advice">If it stalls, send: “Read review_room/data/session.json and POST a full draft to /api/codex-draft. Do not call the target.”</p></div></article>` : "");
     entries.forEach((entry) => {
@@ -473,7 +482,7 @@
     try {
       const response = await fetch(stateUrl, {cache: "no-store"});
       const next = await response.json();
-      const signature = JSON.stringify(next.entries.map((e) => [e.id, e.revision, e.status])) + JSON.stringify(next.busy) + next.error + next.auto_mode + next.run_complete + next.draft_source + next.draft_pending + next.draft_error + JSON.stringify(next.auditor_exchange);
+      const signature = JSON.stringify(next.entries.map((e) => [e.id, e.revision, e.status])) + JSON.stringify(next.busy) + next.error + next.auto_mode + next.run_complete + next.draft_source + next.draft_pending + next.draft_error + JSON.stringify(next.auditor_exchange) + JSON.stringify(next.auditor_history);
       state = next;
       updateAutoMode();
       updateDraftSource();
