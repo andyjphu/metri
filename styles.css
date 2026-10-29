@@ -87,7 +87,8 @@ button { cursor: pointer; }
 .rail-segment.mixed { background: #ff9500; }
 .rail-thumb { position: absolute; left: var(--line-left); width: var(--line-width); background: #fff; pointer-events: none; transition: left .15s ease, width .15s ease; }
 .rail-point { position: absolute; left: 0; display: block; width: 14px; height: 14px; padding: 0; transform: translateY(-50%); border: 0; border-radius: 50%; background: transparent; }
-.rail-point::before { content: ""; position: absolute; top: 4.5px; left: 3px; width: 5px; height: 5px; border-radius: 50%; background: #616161; box-shadow: 0 0 0 2px #fff; }
+.rail-point::before { content: ""; position: absolute; top: 7px; left: 5.5px; width: 3px; height: 3px; transform: translate(-50%, -50%) rotate(45deg); background: #616161; box-shadow: 0 0 0 1px #fff; transition: width .15s ease, height .15s ease; }
+.scroll-rail:hover .rail-point::before, .scroll-rail:focus-within .rail-point::before { width: 5px; height: 5px; }
 .rail-point:hover::before, .rail-point:focus-visible::before { background: #1c1c1e; }
 .rail-label { position: absolute; top: 50%; left: 15px; width: max-content; padding: 3px 6px; transform: translateY(-50%); border-radius: 4px; background: #fff; color: #77777c; font-size: 11px; line-height: 1.35; white-space: nowrap; text-align: left; box-shadow: 0 1px 5px #00000012; opacity: 0; visibility: hidden; cursor: pointer; transition: opacity .25s ease, visibility .25s ease; }
 .scroll-rail:hover .rail-label, .scroll-rail:focus-within .rail-label { opacity: 1; visibility: visible; }
