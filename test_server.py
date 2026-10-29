@@ -18,7 +18,7 @@ class MetriTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.original = (server.DATA, server.STATE_FILE, server.EVENTS_FILE, server.call_api,
-                         server.call_glm, server.CODEX_THREAD_ID)
+                         server.call_openrouter, server.CODEX_THREAD_ID)
         server.DATA = Path(self.tmp.name)
         server.STATE_FILE = server.DATA / "session.json"
         server.EVENTS_FILE = server.DATA / "events.jsonl"
@@ -53,7 +53,7 @@ class MetriTest(unittest.TestCase):
         self.http.server_close()
         self.thread.join(timeout=2)
         (server.DATA, server.STATE_FILE, server.EVENTS_FILE, server.call_api,
-         server.call_glm, server.CODEX_THREAD_ID) = self.original
+         server.call_openrouter, server.CODEX_THREAD_ID) = self.original
         self.tmp.cleanup()
 
     def get(self):
@@ -221,7 +221,7 @@ class MetriTest(unittest.TestCase):
         self.assertEqual(self.target_requests[1]["input"][-1]["output"], '{"stdout":"human approved edit"}')
         self.assertEqual(self.target_requests[1]["input"][-2]["arguments"], '{"edited":true}')
 
-    def test_glm_swap_replaces_current_gray_and_invalidates_following_draft(self):
+    def test_model_swap_replaces_gray_and_archives_following_draft(self):
         first = json.loads(self.get()["entries"][0]["current_text"])
         first["input"][0]["content"] = "Investigate"
         self.post("approve", {"id": 1, "text": json.dumps(first)})
@@ -233,24 +233,58 @@ class MetriTest(unittest.TestCase):
         self.post("codex-draft", {"request": draft})
         original = json.loads(gray["current_text"])
         seen = []
-        def fake_glm(request):
-            seen.append(copy.deepcopy(request))
-            return {"model": server.GLM_MODEL, "output": [
+        def fake_model(request, model):
+            seen.append((copy.deepcopy(request), model))
+            return {"model": model, "output": [
                 {"type": "reasoning", "content": [{"type": "reasoning_text", "text": "I should inspect."}]},
                 {"type": "function_call", "name": "setup", "call_id": "call_glm", "arguments": "{}"}]}
-        server.call_glm = fake_glm
+        server.call_openrouter = fake_model
         with mock.patch.dict("os.environ", {"OPENROUTER_API_KEY": "test-key"}):
-            self.post("swap-glm", {"id": gray["id"]})
+            self.post("swap-model", {"id": gray["id"], "model": "z-ai/glm-5.3"})
             state = self.await_idle()
         swapped = json.loads(state["entries"][1]["current_text"])
         self.assertEqual(len(seen), 1)
+        self.assertEqual(seen[0][1], "z-ai/glm-5.3")
         self.assertEqual(len(self.target_requests), 1)
-        self.assertEqual(swapped["model"], server.GLM_MODEL)
+        self.assertEqual(swapped["model"], "z-ai/glm-5.3")
         self.assertEqual(swapped["output"][0]["content"][0]["text"], "I should inspect.")
-        self.assertEqual(state["entries"][-1]["status"], "stale")
+        self.assertEqual(len(state["entries"]), 2)
         self.assertNotEqual(swapped["output"], original["output"])
         events = [json.loads(line) for line in server.EVENTS_FILE.read_text().splitlines()]
-        self.assertTrue(any(event["kind"] == "gray_swapped_to_glm" for event in events))
+        swap = next(event for event in events if event["kind"] == "gray_swapped")
+        self.assertEqual(swap["removed_ids"], [3])
+        self.assertEqual(len(json.loads((server.DATA / swap["archive"] / "session.json").read_text())["entries"]), 3)
+
+    def test_model_swap_can_replace_earlier_gray_without_retaining_later_outputs(self):
+        first = json.loads(self.get()["entries"][0]["current_text"])
+        first["input"][0]["content"] = "Investigate"
+        self.post("approve", {"id": 1, "text": json.dumps(first)})
+        self.await_idle()
+        gray = self.get()["entries"][-1]
+        next_request = copy.deepcopy(first)
+        next_request["input"] += json.loads(gray["current_text"])["output"] + [
+            {"type": "function_call_output", "call_id": "call_1", "output": "{}"}]
+        self.post("codex-draft", {"request": next_request})
+        self.post("approve", {"id": 3})
+        self.await_idle()
+        self.assertEqual(len(self.get()["entries"]), 4)
+        seen = []
+        def fake_model(request, model):
+            seen.append(model)
+            return {"model": model, "output": [{"type": "message", "role": "assistant",
+                    "content": [{"type": "output_text", "text": "Changed direction"}]}]}
+        server.call_openrouter = fake_model
+        with mock.patch.dict("os.environ", {"OPENROUTER_API_KEY": "test-key"}):
+            self.post("swap-model", {"id": 2, "model": "z-ai/glm-5.3-flash"})
+            state = self.await_idle()
+        self.assertEqual(seen, ["z-ai/glm-5.3-flash"])
+        self.assertEqual(len(self.target_requests), 2)
+        self.assertEqual(len(state["entries"]), 2)
+        self.assertIn("Changed direction", state["entries"][1]["current_text"])
+        events = [json.loads(line) for line in server.EVENTS_FILE.read_text().splitlines()]
+        swap = next(event for event in events if event["kind"] == "gray_swapped")
+        self.assertEqual(swap["removed_ids"], [3, 4])
+        self.assertEqual(len(json.loads((server.DATA / swap["archive"] / "session.json").read_text())["entries"]), 4)
 
     def test_auto_send_requires_explicit_session_switch_and_logs_exact_request(self):
         opening = self.get()["entries"][0]

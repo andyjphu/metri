@@ -25,7 +25,6 @@ EVENTS_FILE = DATA / "events.jsonl"
 LOCK = threading.RLock()
 API_URL = "https://api.openai.com/v1/responses"
 OPENROUTER_URL = "https://openrouter.ai/api/v1/responses"
-GLM_MODEL = "z-ai/glm-5.3"
 CODEX_THREAD_ID = os.environ.get("METRI_CODEX_THREAD_ID") or os.environ.get("CODEX_THREAD_ID")
 
 
@@ -320,14 +319,14 @@ def call_api(payload):
         raise RuntimeError(f"OpenAI HTTP {exc.code}: {body[:2500]}") from exc
 
 
-def call_glm(original):
+def call_openrouter(original, model):
     key = os.environ.get("OPENROUTER_API_KEY")
     if not key:
         raise RuntimeError("Set OPENROUTER_API_KEY before starting Metri.")
     payload = {field: copy.deepcopy(original[field]) for field in
                ("instructions", "input", "tools", "tool_choice", "max_output_tokens", "temperature", "top_p")
                if field in original}
-    payload["model"] = GLM_MODEL
+    payload["model"] = model
     payload["store"] = False
     payload["reasoning"] = {"effort": "high", "exclude": False}
     payload["input"] = [item for item in payload["input"] if item.get("type") != "reasoning"]
@@ -798,9 +797,9 @@ def run_approved(entry_id):
             event("request_failed", entry_id=entry_id, error=str(exc))
 
 
-def run_glm_swap(trace_id, target_id, target_revision, request):
+def run_model_swap(trace_id, target_id, target_revision, request, model):
     try:
-        response = call_glm(request)
+        response = call_openrouter(request, model)
         with LOCK:
             state = load_state()
             target = current_entry(state, target_id)
@@ -808,15 +807,27 @@ def run_glm_swap(trace_id, target_id, target_revision, request):
                     or target["revision"] != target_revision
                     or state["busy"] != {"kind": "swap", "entry_id": target_id}):
                 return
+            archive = DATA / "archive" / f"swap-{trace_id}-{target_id}-{datetime.now(timezone.utc):%Y%m%dT%H%M%S%fZ}"
+            archive.mkdir(parents=True)
+            archived = copy.deepcopy(state)
+            archived["busy"] = None
+            (archive / "session.json").write_text(dump(archived) + "\n")
+            if EVENTS_FILE.exists():
+                shutil.copy2(EVENTS_FILE, archive / "events.jsonl")
+            index = state["entries"].index(target)
+            removed_ids = [entry["id"] for entry in state["entries"][index + 1:]]
+            state["entries"] = state["entries"][:index + 1]
+            compact_ids(state)
             before = target["current_text"]
             state["busy"] = None
+            state["run_complete"] = False
             update_entry(state, target_id, dump(response))
             state["error"] = None
             save_state(state)
-            event("gray_swapped_to_glm", entry_id=target_id, before=before,
-                  after=target["current_text"], source_request=request)
-            if state["entries"][-1]["side"] == "gray":
-                queue_next_draft(state, "gray response replaced")
+            event("gray_swapped", entry_id=target_id, model=model, removed_ids=removed_ids,
+                  archive=str(archive.relative_to(DATA)), before_sha256=sha(before),
+                  after_sha256=sha(target["current_text"]), source_request=request)
+            queue_next_draft(state, "gray response replaced")
     except Exception as exc:
         with LOCK:
             state = load_state()
@@ -1022,15 +1033,15 @@ class Handler(BaseHTTPRequestHandler):
                     save_state(state)
                     self.send(200, {"entry": entry})
                     return
-                if path == "/api/swap-glm":
+                if path == "/api/swap-model":
                     if state["auto_mode"]:
                         raise ValueError("Turn Auto off before replacing a response.")
                     target = current_entry(state, int(data["id"]))
-                    if not target or target["side"] != "gray" or target not in state["entries"][-2:]:
-                        raise ValueError("Only the current gray response can be replaced.")
-                    if (state["entries"][-1]["side"] == "blue"
-                            and state["entries"][-1]["status"] not in {"draft", "stale"}):
-                        raise ValueError("The following blue request must be unsent.")
+                    if not target or target["side"] != "gray":
+                        raise ValueError("Choose a gray response to replace.")
+                    model = data.get("model")
+                    if not isinstance(model, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:/~+-]{0,127}", model):
+                        raise ValueError("Enter an OpenRouter model ID.")
                     if not os.environ.get("OPENROUTER_API_KEY"):
                         raise ValueError("Set OPENROUTER_API_KEY before starting Metri.")
                     index = state["entries"].index(target)
@@ -1044,10 +1055,10 @@ class Handler(BaseHTTPRequestHandler):
                     state["error"] = None
                     trace_id = load_traces()["active"]
                     save_state(state)
-                    event("gray_swap_requested", entry_id=target["id"], model=GLM_MODEL)
+                    event("gray_swap_requested", entry_id=target["id"], model=model)
                     self.send(202, {"ok": True})
-                    threading.Thread(target=run_glm_swap,
-                                     args=(trace_id, target["id"], target["revision"], source),
+                    threading.Thread(target=run_model_swap,
+                                     args=(trace_id, target["id"], target["revision"], source, model),
                                      daemon=True).start()
                     return
                 if path in {"/api/approve", "/api/auto-send"}:

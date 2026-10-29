@@ -10,6 +10,7 @@
   const viewModeKey = "metri:view-mode:v1";
   const collapseKey = (traceId) => `metri:collapse:v1:${traceId}`;
   const scrollKey = (traceId) => `metri:scroll:v1:${traceId}`;
+  const swapModelKey = "metri:swap-model:v1";
   function storedValue(key) {
     try {
       const current = localStorage.getItem(key);
@@ -344,7 +345,7 @@
   async function finishEdits() {
     for (const id of [...edits.keys()]) await saveEdit(id);
     await Promise.all([...saving.values()]);
-    if (edits.size || saveError) throw Error("Finish saving edits before switching traces.");
+    if (edits.size || saveError) throw Error("Finish saving edits before continuing.");
   }
 
   async function selectTrace(id) {
@@ -431,26 +432,23 @@
       const pen = !state.busy && (entry.side === "gray" || entry.status !== "stale") ?
         button(pencil, renderedEditors.has(entry.id) ? "Done editing" : "Edit message", "edit", "edit") : "";
       const caret = `<button class="collapse" type="button" title="${collapsed ? "Expand" : "Collapse"} bubble" aria-label="${collapsed ? "Expand" : "Collapse"} bubble" aria-expanded="${!collapsed}" data-action="collapse">${collapseIcon}</button>`;
-      const swappable = entry.side === "gray" && !state.busy && !state.auto_mode &&
-        (entry === last || (index === entries.length - 2 && last?.side === "blue" && ["draft", "stale"].includes(last.status)));
-      const swap = swappable ? button(swapIcon, "Replace with GLM 5.3", "swap-glm") : "";
-      const taps = `<div class="tapback">${controls}${swap}${pen}${caret}</div>`;
+      const swappable = entry.side === "gray" && !state.busy && !state.auto_mode;
+      const swap = swappable ? button(swapIcon, "Replace response with another model", "swap-model") : "";
+      const taps = `<div class="tapback"><div class="tapback-extra">${controls}${swap}${pen}</div>${caret}</div>`;
       const editors = editing ? `<div class="render-editors">${editableParts(entry).map((part) =>
         `<label class="render-editor"><span>${escapeHtml(part.label)}</span><textarea spellcheck="false" data-id="${entry.id}" data-editor-path="${escapeHtml(part.path ? JSON.stringify(part.path) : "")}"></textarea></label>`
       ).join("")}</div>` : "";
       const cached = previewCache.get(entry.id);
       const preview = cached?.revision === entry.revision ? cached.text : desc;
       const message = `<article class="message ${entry.side} ${collapsed ? "collapsed" : ""} ${entry.id === selected ? "selected" : ""} ${editing ? "editing" : ""}" id="m-${entry.id}" data-id="${entry.id}">
-        <div class="message-head">#${index + 1} · ${escapeHtml(desc)}</div>
+        <div class="message-head">#${index + 1} · ${escapeHtml(desc)}${state.busy?.kind === "swap" && state.busy.entry_id === entry.id ? " · Pending response from provider" : ""}</div>
         <div class="bubble">${taps}<div class="collapsed-preview ${viewMode}">${escapeHtml(preview)}</div><div class="expanded-content">${viewMode === "raw" ? `<textarea class="raw-editor" spellcheck="false" aria-label="${escapeHtml(label(entry))} JSON" data-id="${entry.id}" ${editable ? "" : "readonly"}></textarea>` : `<div class="message-text ${viewMode}" data-id="${entry.id}"></div>${editors}`}</div></div>
       </article>`;
       const auditor = (auditorByGray.get(entry.id) || []).map((exchange) =>
         `<article class="message auditor"><div class="message-head">Auditor question</div><div class="bubble"><div class="auditor-part">${escapeHtml(exchange.question)}</div>${exchange.answer == null ? "" : `<div class="auditor-answer"><div class="auditor-part-label">Answer to auditor</div><div class="auditor-part">${escapeHtml(exchange.answer)}</div></div>`}</div></article>`
       ).join("");
       return message + auditor;
-    }).join("") + (state.busy?.kind === "swap" ?
-      `<article class="message gray pending"><div class="bubble"><span class="pending-text">Pending GLM 5.3 response.</span></div></article>` :
-      state.run_complete ? "" : state.busy?.kind === "target" ?
+    }).join("") + (state.busy?.kind === "swap" || state.run_complete ? "" : state.busy?.kind === "target" ?
       `<article class="message gray pending"><div class="bubble"><span class="pending-text">Pending response from provider.</span></div></article>` :
       last?.side === "gray" ?
         state.draft_source === "api" ?
@@ -716,12 +714,17 @@
         saveError = false;
         await refresh(true, true);
         return;
-      } else if (name === "swap-glm") {
-        if (!confirm(`Replace gray #${id} with a new GLM 5.3 response?`)) return;
-        for (const editedId of [...edits.keys()]) await saveEdit(editedId);
-        await Promise.allSettled([...saving.values()]);
-        await api("/api/swap-glm", {id});
-        await refresh(true, true);
+      } else if (name === "swap-model") {
+        const index = state.entries.findIndex((entry) => entry.id === id);
+        if (index < 0) return;
+        const later = state.entries.length - index - 1;
+        const dialog = $("#swap-dialog");
+        dialog.dataset.id = id;
+        $("#swap-detail").textContent = later ? `Later ${later} bubble${later === 1 ? "" : "s"} will be archived and removed.` : `Gray #${id} will be replaced.`;
+        $("#swap-model").value = storedValue(swapModelKey) || "z-ai/glm-5.3";
+        $("#swap-error").hidden = true;
+        dialog.showModal();
+        $("#swap-model").focus();
         return;
       } else if (name === "rewind") {
         const index = state.entries.findIndex((entry) => entry.id === id);
@@ -805,6 +808,27 @@
     const btn = event.target.closest("[data-action]");
     if (!btn) return;
     action(btn.dataset.action, Number(btn.closest(".message")?.dataset.id || state.entries.at(-1).id));
+  });
+  $("#swap-cancel").addEventListener("click", () => $("#swap-dialog").close());
+  $("#swap-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const dialog = $("#swap-dialog");
+    const submit = $("#swap-submit");
+    const error = $("#swap-error");
+    const model = $("#swap-model").value.trim();
+    submit.disabled = true;
+    error.hidden = true;
+    try {
+      await finishEdits();
+      await api("/api/swap-model", {id: Number(dialog.dataset.id), model});
+      storeValue(swapModelKey, model);
+      selected = Number(dialog.dataset.id);
+      dialog.close();
+      await refresh(true, true);
+    } catch (failure) {
+      error.textContent = failure.message;
+      error.hidden = false;
+    } finally { submit.disabled = false; }
   });
   $("#collapse-all").addEventListener("change", async (event) => {
     const collapse = event.target.checked;
