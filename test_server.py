@@ -76,11 +76,20 @@ class ReviewRoomTest(unittest.TestCase):
             time.sleep(.02)
         self.fail("Model call did not finish")
 
+    def await_draft(self):
+        for _ in range(100):
+            state = self.get()
+            if state["entries"][-1]["side"] == "blue" and state["entries"][-1]["status"] == "draft":
+                return state
+            time.sleep(.02)
+        self.fail("API draft did not appear")
+
     def test_trace_names_and_switch_preserve_each_conversation(self):
         opening = self.get()
         card = server.DATA / "EXPERIMENT_CARD.md"
         self.assertIn("## System prompt", card.read_text())
         self.assertEqual(self.get_traces()["active"], "current")
+        self.post("draft-source", {"source": "api"})
         self.post("rename-trace", {"name": "~/better-petri/E110"})
         self.assertEqual(self.get_traces()["traces"][0]["name"], "~/better-petri/E110")
         request = json.loads(opening["entries"][0]["current_text"])
@@ -106,10 +115,12 @@ class ReviewRoomTest(unittest.TestCase):
 
         self.post("select-trace", {"id": "archive"})
         self.assertEqual(self.get_traces()["active"], "archive")
+        self.assertEqual(self.get()["draft_source"], "codex")
         self.assertEqual(json.loads(self.get()["entries"][0]["current_text"])["input"][0]["content"], "Archived trace")
         self.assertNotIn("AI description of the local setup.", card.read_text())
         self.assertTrue((server.DATA / "traces" / "current" / "session.json").is_file())
         self.post("select-trace", {"id": "current"})
+        self.assertEqual(self.get()["draft_source"], "api")
         self.assertEqual(self.get_traces()["active"], "current")
         self.assertEqual(json.loads(self.get()["entries"][0]["current_text"])["instructions"], "Changed first prompt")
         self.assertIn("AI description of the local setup.", card.read_text())
@@ -255,6 +266,130 @@ class ReviewRoomTest(unittest.TestCase):
                 time.sleep(.01)
             self.assertTrue(wake.called)
             self.assertIn("gray response pending", wake.call_args.args[0])
+
+    def test_api_source_creates_editable_draft_without_sending_target(self):
+        calls = []
+
+        def fake_api(request):
+            calls.append(copy.deepcopy(request))
+            if request["instructions"].startswith("You draft the next blue request"):
+                return {"output": [{"type": "message", "content": [{"type": "output_text",
+                    "text": json.dumps({"items": [{"type": "function_call_output",
+                        "call_id": "call_1", "output": '{"ok":true}'}]})}]}]}
+            if len([item for item in calls if not item["instructions"].startswith("You draft")]) == 1:
+                return {"output": [{"type": "function_call", "name": "setup",
+                    "call_id": "call_1", "arguments": "{}"}]}
+            return {"output": [{"type": "message", "role": "assistant", "content": [
+                {"type": "output_text", "text": "Done"}]}]}
+
+        server.call_api = fake_api
+        self.post("draft-source", {"source": "api"})
+        opening = self.get()["entries"][0]
+        first = json.loads(opening["current_text"])
+        first["input"][0]["content"] = "Investigate"
+        self.post("approve", {"id": 1, "text": json.dumps(first)})
+        state = self.await_draft()
+        self.assertEqual(state["draft_source"], "api")
+        self.assertFalse(state["draft_pending"])
+        self.assertEqual(len(state["entries"]), 3)
+        self.assertEqual(len([item for item in calls if item["instructions"] == "Test instructions"]), 1)
+        draft = json.loads(state["entries"][-1]["current_text"])
+        self.assertEqual(draft["input"][-1]["output"], '{"ok":true}')
+        self.assertEqual(draft["model"], "test-model")
+        self.post("approve", {"id": 3, "text": json.dumps(draft)})
+        self.await_idle()
+        self.assertEqual(len([item for item in calls if item["instructions"] == "Test instructions"]), 2)
+
+    def test_switching_off_api_discards_inflight_draft(self):
+        started = threading.Event()
+        release = threading.Event()
+
+        def fake_api(request):
+            if request["instructions"].startswith("You draft the next blue request"):
+                started.set()
+                release.wait(2)
+                return {"output": [{"type": "message", "content": [{"type": "output_text",
+                    "text": json.dumps({"items": [{"type": "function_call_output",
+                        "call_id": "call_1", "output": "reply"}]})}]}]}
+            return {"output": [{"type": "function_call", "name": "setup",
+                "call_id": "call_1", "arguments": "{}"}]}
+
+        server.call_api = fake_api
+        self.post("draft-source", {"source": "api"})
+        opening = self.get()["entries"][0]
+        first = json.loads(opening["current_text"])
+        first["input"][0]["content"] = "Investigate"
+        self.post("approve", {"id": 1, "text": json.dumps(first)})
+        self.assertTrue(started.wait(2))
+        self.post("draft-source", {"source": "codex"})
+        release.set()
+        for _ in range(100):
+            if any(json.loads(line)["kind"] == "api_draft_discarded"
+                   for line in server.EVENTS_FILE.read_text().splitlines()):
+                break
+            time.sleep(.02)
+        state = self.get()
+        self.assertEqual(state["draft_source"], "codex")
+        self.assertFalse(state["draft_pending"])
+        self.assertEqual(len(state["entries"]), 2)
+
+    def test_api_draft_never_auto_sends_without_auditor_review(self):
+        target_calls = []
+
+        def fake_api(request):
+            if request["instructions"].startswith("You draft the next blue request"):
+                return {"output": [{"type": "message", "content": [{"type": "output_text",
+                    "text": json.dumps({"items": [{"type": "function_call_output",
+                        "call_id": "call_1", "output": "reply"}]})}]}]}
+            target_calls.append(copy.deepcopy(request))
+            return {"output": [{"type": "function_call", "name": "setup",
+                "call_id": "call_1", "arguments": "{}"}]}
+
+        server.call_api = fake_api
+        self.post("draft-source", {"source": "api"})
+        self.post("auto-mode", {"enabled": True})
+        first = json.loads(self.get()["entries"][0]["current_text"])
+        first["input"][0]["content"] = "Investigate"
+        self.post("auto-send", {"id": 1, "text": json.dumps(first)})
+        state = self.await_draft()
+        self.assertTrue(state["auto_mode"])
+        self.assertEqual(len(target_calls), 1)
+        self.assertEqual(state["entries"][-1]["status"], "draft")
+
+    def test_edit_during_api_generation_does_not_publish_stale_draft(self):
+        started = threading.Event()
+        release = threading.Event()
+
+        def fake_api(request):
+            if request["instructions"].startswith("You draft the next blue request"):
+                started.set()
+                release.wait(2)
+                return {"output": [{"type": "message", "content": [{"type": "output_text",
+                    "text": json.dumps({"items": [{"type": "function_call_output",
+                        "call_id": "call_1", "output": "old reply"}]})}]}]}
+            return {"output": [{"type": "function_call", "name": "setup",
+                "call_id": "call_1", "arguments": "{}"}]}
+
+        server.call_api = fake_api
+        self.post("draft-source", {"source": "api"})
+        first = json.loads(self.get()["entries"][0]["current_text"])
+        first["input"][0]["content"] = "Investigate"
+        self.post("approve", {"id": 1, "text": json.dumps(first)})
+        self.assertTrue(started.wait(2))
+        gray = self.get()["entries"][-1]
+        changed = json.loads(gray["current_text"])
+        changed["output"][0]["arguments"] = '{"changed":true}'
+        self.post("edit", {"id": gray["id"], "text": json.dumps(changed)})
+        release.set()
+        for _ in range(100):
+            if any(json.loads(line)["kind"] == "api_draft_discarded"
+                   for line in server.EVENTS_FILE.read_text().splitlines()):
+                break
+            time.sleep(.02)
+        state = self.get()
+        self.assertEqual(len(state["entries"]), 2)
+        self.assertFalse(state["draft_pending"])
+        self.assertIn("Conversation changed", state["draft_error"])
 
     def test_refresh_replaces_blue_draft_without_target_call(self):
         opening = self.get()["entries"][0]
