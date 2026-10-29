@@ -27,6 +27,7 @@
   let saveError = false;
   let traces = null;
   let switchingTrace = false;
+  let changingAuto = false;
   let sendingId = null;
   let scrollPersistenceSuspended = true;
   let scrollSaveTimer = null;
@@ -267,6 +268,10 @@
     $("#status-program").hidden = !program;
   }
 
+  function updateAutoMode() {
+    if (!changingAuto) $("#auto-mode").checked = state?.auto_mode === true;
+  }
+
   function renderRequestContext() {
     const body = $("#request-context-body");
     const first = state?.entries?.[0];
@@ -389,6 +394,7 @@
     showNotice(state.error || "", !!state.error);
     updateSaveStatus();
     updateStatusIndicators();
+    updateAutoMode();
     renderRequestContext();
     $("#collapse-all").checked = collapseAll;
     $("#messages").innerHTML = entries.map((entry, index) => {
@@ -457,6 +463,7 @@
       const next = await response.json();
       const signature = JSON.stringify(next.entries.map((e) => [e.id, e.revision, e.status])) + JSON.stringify(next.busy) + next.error + next.auto_mode + next.run_complete;
       state = next;
+      updateAutoMode();
       if (!force && signature === lastSignature) return;
       lastSignature = signature;
       if (document.activeElement?.tagName === "TEXTAREA" && !force && !next.busy) return;
@@ -767,6 +774,38 @@
     } catch (error) {
       event.target.checked = collapseAll;
       showNotice(error.message, true);
+    }
+  });
+  $("#auto-mode").addEventListener("change", async (event) => {
+    const input = event.target;
+    const enabled = input.checked;
+    changingAuto = true;
+    input.disabled = true;
+    try {
+      await finishEdits();
+      if (enabled && state?.run_complete) throw Error("This run is complete. Rewind to continue it.");
+      if (enabled && state?.entries.at(-1)?.status === "stale")
+        throw Error("Refresh the stale blue draft before turning on Auto.");
+      const result = await api("/api/auto-mode", {enabled});
+      state.auto_mode = result.auto_mode;
+      await refresh(true, true);
+      const latest = state.entries.at(-1);
+      if (enabled && !state.busy && latest?.side === "blue" && latest.status === "draft") {
+        await api("/api/auto-send", {id: latest.id, text: latest.current_text});
+        await refresh(true, true);
+      }
+    } catch (error) {
+      if (enabled && state?.auto_mode) {
+        try {
+          await api("/api/auto-mode", {enabled: false});
+          state.auto_mode = false;
+        } catch { /* Keep the server state visible on the next refresh. */ }
+      }
+      showNotice(error.message, true);
+    } finally {
+      changingAuto = false;
+      input.disabled = false;
+      updateAutoMode();
     }
   });
   $("#trace-select").addEventListener("change", (event) => selectTrace(event.target.value));

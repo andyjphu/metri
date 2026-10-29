@@ -232,6 +232,30 @@ class ReviewRoomTest(unittest.TestCase):
         self.post("refresh-draft", {"id": self.get()["entries"][-1]["id"]})
         self.assertFalse(self.get()["run_complete"])
 
+    def test_auto_mode_wakes_auditor_after_target_response(self):
+        opening = self.get()["entries"][0]
+        request = json.loads(opening["current_text"])
+        request["input"][0]["content"] = "Investigate"
+        with mock.patch.object(server, "notify_codex") as wake:
+            self.post("auto-mode", {"enabled": True})
+            self.post("auto-send", {"id": opening["id"], "text": json.dumps(request)})
+            self.await_idle()
+            for _ in range(100):
+                if wake.called:
+                    break
+                time.sleep(.01)
+            self.assertTrue(wake.called)
+            self.assertIn("Auto mode is enabled", wake.call_args.args[0])
+            wake.reset_mock()
+            self.post("auto-mode", {"enabled": False})
+            self.post("auto-mode", {"enabled": True})
+            for _ in range(100):
+                if wake.called:
+                    break
+                time.sleep(.01)
+            self.assertTrue(wake.called)
+            self.assertIn("gray response pending", wake.call_args.args[0])
+
     def test_refresh_replaces_blue_draft_without_target_call(self):
         opening = self.get()["entries"][0]
         request = json.loads(opening["current_text"])

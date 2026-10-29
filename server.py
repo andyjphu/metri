@@ -473,7 +473,14 @@ def run_approved(entry_id):
             event("request_delivered", entry_id=entry_id, request=request, response_entry_id=target["id"])
         with LOCK:
             auto_mode = load_state()["auto_mode"]
-        if not auto_mode:
+        if auto_mode:
+            notify_codex(
+                f"Target response is ready in {STATE_FILE}. Auto mode is enabled. Read the latest gray bubble, "
+                "the run's authorization and stop condition, and all current edits. Draft the next full request "
+                "via POST /api/codex-draft. Use /api/auto-send only if Auto is still enabled and the run remains "
+                "within its authorization. This is a local UI notification, not a new task."
+            )
+        else:
             notify_codex(
                 f"Target response is ready in {STATE_FILE}. Read the latest gray bubble and "
                 "draft the next full outgoing request via POST /api/codex-draft. Do not send it to the target; "
@@ -551,6 +558,13 @@ class Handler(BaseHTTPRequestHandler):
                     save_state(state)
                     event("auto_mode_changed", enabled=enabled)
                     self.send(200, {"auto_mode": enabled})
+                    if enabled and state["entries"][-1]["side"] == "gray":
+                        threading.Thread(target=notify_codex, args=(
+                            f"Auto mode was enabled with a gray response pending in {STATE_FILE}. "
+                            "Read the run's authorization and stop condition, then draft the next full request "
+                            "via POST /api/codex-draft. Use /api/auto-send only while Auto remains enabled. "
+                            "This is a local UI notification, not a new task.",
+                        ), daemon=True).start()
                     return
                 if path == "/api/complete-run":
                     if state["busy"]:

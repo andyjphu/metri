@@ -19,11 +19,12 @@ button { cursor: pointer; }
 .trace-picker button:hover { background: #eeeef2; }
 .trace-picker button svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .topbar-actions { justify-self: end; display: flex; align-items: center; gap: 12px; }
-.collapse-switch { display: flex; align-items: center; gap: 6px; color: #55555a; font-size: 12px; white-space: nowrap; cursor: pointer; }
-.collapse-switch input { appearance: none; width: 30px; height: 18px; margin: 0; border-radius: 9px; background: #d3d3d7; position: relative; cursor: pointer; }
-.collapse-switch input::after { content: ""; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px #0003; transition: transform .15s ease; }
-.collapse-switch input:checked { background: var(--blue); }
-.collapse-switch input:checked::after { transform: translateX(12px); }
+.topbar-switch { display: flex; align-items: center; gap: 6px; color: #55555a; font-size: 12px; white-space: nowrap; cursor: pointer; }
+.topbar-switch input { appearance: none; width: 30px; height: 18px; margin: 0; border-radius: 9px; background: #d3d3d7; position: relative; cursor: pointer; }
+.topbar-switch input::after { content: ""; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px #0003; transition: transform .15s ease; }
+.topbar-switch input:checked { background: var(--blue); }
+.topbar-switch input:checked::after { transform: translateX(12px); }
+.topbar-switch input:disabled { opacity: .5; cursor: default; }
 .view-mode { position: relative; display: grid; grid-template-columns: repeat(2, 1fr); width: 144px; height: 30px; padding: 2px; border: 1px solid #d3d3d7; border-radius: 16px; background: #eeeef0; color: #65656b; font-size: 12px; }
 .view-mode::before { content: ""; position: absolute; top: 2px; left: 2px; width: calc((100% - 4px) / 2); height: 24px; border-radius: 13px; background: #fff; box-shadow: 0 1px 3px #0002; transition: transform .18s ease; }
 .view-mode[data-mode="cleaned"]::before { transform: translateX(100%); }

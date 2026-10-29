@@ -15,7 +15,7 @@ Each trace has an `EXPERIMENT_CARD.md` beside its logs; the active copy is `data
 
 ## Send mode, an agent setting
 
-`send_mode` is `manual` by default. Set it to `autonomous` only when the user explicitly authorizes unattended target turns for the current run. This setting belongs to the agent workflow, not the human page. The local harness accommodates it through `POST /api/auto-mode` with `{"enabled": true}` followed by `POST /api/auto-send` for each complete blue request. Each send records the exact request as `auto_send`. Stop when the run ends or the user cancels autonomy; call `POST /api/complete-run` at the end, which turns Auto off. For a pause, call `POST /api/auto-mode` with `{"enabled": false}`. Never infer authorization merely from a persisted server flag.
+`send_mode` is `manual` by default. Set it to `autonomous` only when the user explicitly authorizes unattended target turns for the current run. The page's Auto slider and `POST /api/auto-mode` control the server flag. The slider sends a waiting blue draft when switched on; the server queues an agent notification after each gray response in Auto mode. For each complete blue request within the authorized scope, use `POST /api/auto-send`; each send records the exact request as `auto_send`. Stop when the run reaches its stop condition or the user cancels autonomy; call `POST /api/complete-run` at the end, which turns Auto off. For a pause, call `POST /api/auto-mode` with `{"enabled": false}`. Never infer authorization merely from a persisted server flag.
 
 ## Run a turn
 
