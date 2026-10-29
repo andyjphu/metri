@@ -53,34 +53,71 @@ def event(kind, **details):
         out.write(json.dumps({"at": now(), "kind": kind, **details}, ensure_ascii=False) + "\n")
 
 
-def tool(name, description, properties, required):
-    return {
-        "type": "function", "name": name, "description": description,
-        "parameters": {
-            "type": "object", "properties": properties, "required": required,
-            "additionalProperties": False,
-        },
-        "strict": True,
-    }
+def card_section(card, heading):
+    """Read one fenced value from our generated experiment card."""
+    marker = f"## {heading}\n"
+    if marker not in card:
+        return None
+    lines = card.split(marker, 1)[1].splitlines()
+    for index, line in enumerate(lines):
+        if re.fullmatch(r"`{3,}(?:json|text)?", line):
+            fence = line[:len(line) - len(line.lstrip("`"))]
+            try:
+                end = lines.index(fence, index + 1)
+            except ValueError:
+                return None
+            return "\n".join(lines[index + 1:end])
+        if line.startswith("## "):
+            break
+    return None
 
 
-STR = {"type": "string"}
-TOOLS = [
-    tool("terminal", "Run a shell command in the workspace and return its output and exit code.",
-         {"cmd": STR}, ["cmd"]),
-]
+def request_from_card(path):
+    if not path.is_file():
+        return None
+    card = path.read_text()
+    settings_text = card_section(card, "Request settings")
+    if settings_text is None:
+        return None
+    try:
+        settings = json.loads(settings_text)
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(settings, dict):
+        return None
+    prompt = card_section(card, "System prompt")
+    request = {**settings, "instructions": prompt or "", "input": [{"role": "user", "content": ""}]}
+    request["store"] = False
+    return request
+
+
+def request_from_events(path):
+    if not path.is_file():
+        return None
+    for line in reversed(path.read_text().splitlines()):
+        try:
+            event_data = json.loads(line)
+        except ValueError:
+            continue
+        request = event_data.get("exact_request")
+        if isinstance(request, dict) and isinstance(request.get("input"), list):
+            return copy.deepcopy(request)
+    return None
 
 
 def default_request():
-    return {
-        "model": "gpt-6-sol",
-        "access_programs": {"cyber": "daybreak_blue"},
-        "instructions": "",
-        "input": [{"role": "user", "content": ""}],
-        "tools": TOOLS,
-        "max_output_tokens": 3500,
-        "store": False,
-    }
+    """Recover experiment details from logs, then the card; otherwise leave them blank."""
+    from_events = request_from_events(EVENTS_FILE)
+    if from_events:
+        request = {key: value for key, value in from_events.items()
+                   if key not in {"input", "previous_response_id", "conversation"}}
+        request["input"] = [{"role": "user", "content": ""}]
+        request["store"] = False
+        return request
+    from_card = request_from_card(DATA / "EXPERIMENT_CARD.md")
+    if from_card:
+        return from_card
+    return {"model": "", "instructions": "", "input": [{"role": "user", "content": ""}], "store": False}
 
 
 def make_entry(state, side, value, status):
@@ -109,6 +146,14 @@ def load_state():
         state.setdefault("auto_mode", False)
         state.setdefault("run_complete", False)
         return state
+    catalog = load_traces()
+    snapshot = DATA / "traces" / catalog["active"] / "session.json"
+    if snapshot.is_file():
+        state = json.loads(snapshot.read_text())
+        state.setdefault("auto_mode", False)
+        state.setdefault("run_complete", False)
+        save_state(state)
+        return state
     state = {"version": 1, "next_id": 1, "entries": [], "busy": None, "error": None, "auto_mode": False, "run_complete": False}
     make_entry(state, "blue", default_request(), "draft")
     save_state(state)
@@ -128,7 +173,7 @@ def load_traces():
     target = DATA / "traces.json"
     if target.exists():
         return json.loads(target.read_text())
-    catalog = {"active": "current", "traces": [{"id": "current", "name": "~/better-petri/current"}]}
+    catalog = {"active": "current", "traces": [{"id": "current", "name": str(STATE_FILE)}]}
     save_traces(catalog)
     return catalog
 

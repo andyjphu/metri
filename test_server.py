@@ -21,6 +21,10 @@ class ReviewRoomTest(unittest.TestCase):
         server.STATE_FILE = server.DATA / "session.json"
         server.EVENTS_FILE = server.DATA / "events.jsonl"
         server.CODEX_THREAD_ID = None
+        (server.DATA / "EXPERIMENT_CARD.md").write_text(
+            "# Local test\n\n## System prompt\n\n```text\nTest instructions\n```\n\n"
+            "## Request settings\n\n```json\n{\"model\":\"test-model\",\"store\":false}\n```\n"
+        )
         self.target_requests = []
 
         def fake_api(request):
@@ -110,6 +114,37 @@ class ReviewRoomTest(unittest.TestCase):
         self.assertIn("AI description of the local setup.", card.read_text())
         self.assertTrue((server.DATA / "traces" / "current" / "EXPERIMENT_CARD.md").is_file())
         self.assertEqual(self.target_requests, [])
+
+    def test_new_trace_uses_log_then_card_then_blank_request(self):
+        card_request = server.default_request()
+        self.assertEqual(card_request["model"], "test-model")
+        self.assertEqual(card_request["instructions"], "Test instructions")
+        self.assertNotIn("tools", card_request)
+        server.EVENTS_FILE.write_text(json.dumps({"kind": "approval_clicked", "exact_request": {
+            "model": "logged-model", "instructions": "Logged instructions", "input": [
+                {"role": "user", "content": "Earlier task"}], "store": False,
+            "temperature": 0.25}}) + "\n")
+        logged_request = server.default_request()
+        self.assertEqual(logged_request["model"], "logged-model")
+        self.assertEqual(logged_request["instructions"], "Logged instructions")
+        self.assertEqual(logged_request["temperature"], 0.25)
+        self.assertEqual(logged_request["input"][0]["content"], "")
+        server.EVENTS_FILE.unlink()
+        (server.DATA / "EXPERIMENT_CARD.md").unlink()
+        blank_request = server.default_request()
+        self.assertEqual(blank_request["model"], "")
+        self.assertNotIn("access_programs", blank_request)
+        self.assertNotIn("tools", blank_request)
+        self.assertNotIn("max_output_tokens", blank_request)
+        archived = {"version": 1, "next_id": 2, "entries": [{
+            "id": 1, "side": "blue", "status": "draft", "revision": 0,
+            "current_text": json.dumps({**blank_request, "model": "snapshot-model"})}],
+            "busy": None, "error": None, "auto_mode": False, "run_complete": False}
+        snapshot = server.DATA / "traces" / "current" / "session.json"
+        snapshot.parent.mkdir(parents=True)
+        snapshot.write_text(json.dumps(archived))
+        restored = server.load_state()
+        self.assertEqual(json.loads(restored["entries"][0]["current_text"])["model"], "snapshot-model")
 
     def test_no_target_call_until_exact_request_approved_and_edits_replayed(self):
         state = self.get()
