@@ -1,0 +1,113 @@
+{
+  "idea_name": "train_only_on_confident_labels",
+  "weak_model": "Qwen/Qwen1.5-0.5B-Chat",
+  "strong_model": "Qwen/Qwen3-4B-Base",
+  "weak_acc": 0.5439429928741093,
+  "hard_weak_label_acc": 0.6044535599179608,
+  "strong_acc": 0.7300079176563737,
+  "transfer_acc": 0.6104513064133017,
+  "pgr": 0.4032414126753753,
+  "fixed_weak_baseline": 0.5279592240696753,
+  "fixed_strong_baseline": 0.7325316706254948,
+  "training_time": 5633.95211148262,
+  "filter_stats": {
+    "total_samples": 6826,
+    "kept_samples": 6075,
+    "filtered_samples": 751,
+    "retention_rate": 0.8899794901845883,
+    "low_threshold": 0.25,
+    "high_threshold": 0.75,
+    "avg_confidence_all": 0.9284314753249213,
+    "avg_confidence_filtered": 0.6306875554445421
+  },
+  "confidence_thresholds": {
+    "low": 0.25,
+    "high": 0.75
+  },
+  "config": {
+    "epochs": 5,
+    "lr": 0.0001,
+    "batch_size": 32,
+    "seed": 42,
+    "loss": "xent",
+    "lora_r": 32,
+    "lora_alpha": 32,
+    "lora_dropout": 0.0,
+    "load_in_4bit": false
+  },
+  "detailed_eval": {
+    "strong": {
+      "final_eval": {
+        "accuracy": 0.6104513064133017,
+        "correct": 771,
+        "total": 1263,
+        "pred_distribution": {
+          "0": 658,
+          "1": 605
+        },
+        "label_distribution": {
+          "1": 639,
+          "0": 624
+        },
+        "per_subset": {
+          "helpsteer2_validation": {
+            "accuracy": 0.5867768595041323,
+            "correct": 213,
+            "total": 363,
+            "pred_distribution": {
+              "1": 182,
+              "0": 181
+            },
+            "label_distribution": {
+              "1": 174,
+              "0": 189
+            }
+          },
+          "helpsteer3_validation": {
+            "accuracy": 0.632,
+            "correct": 316,
+            "total": 500,
+            "pred_distribution": {
+              "0": 239,
+              "1": 261
+            },
+            "label_distribution": {
+              "1": 261,
+              "0": 239
+            }
+          },
+          "reward_bench_2_test_Focus": {
+            "accuracy": 0.65,
+            "correct": 130,
+            "total": 200,
+            "pred_distribution": {
+              "1": 86,
+              "0": 114
+            },
+            "label_distribution": {
+              "1": 106,
+              "0": 94
+            }
+          },
+          "rm_bench_chat": {
+            "accuracy": 0.56,
+            "correct": 112,
+            "total": 200,
+            "pred_distribution": {
+              "1": 76,
+              "0": 124
+            },
+            "label_distribution": {
+              "1": 98,
+              "0": 102
+            }
+          }
+        }
+      }
+    }
+  },
+  "cached_at": "2026-01-16 17:31:55",
+  "seed": 42,
+  "hyperparam_config_key": "Qwen_Qwen3_4B_Base_Qwen_Qwen1_5_0_5B_Chat_e5_lr0.0001_bs32_schlinear_conf_high0.75_conf_low0.25",
+  "dataset_name": "chat-0115"
+}

@@ -1,0 +1,52 @@
+{
+  "source_url": "https://github.com/safety-research/automated-w2s-research",
+  "archive_url": "https://raw.githubusercontent.com/safety-research/automated-w2s-research/refs/heads/main/cache_results.tar.gz",
+  "archive_sha256": "dd512c64b22d0d6f1800b2a460c6228e139aba180a52eadef3a01c248b2481b7",
+  "scope": "chat-0115 seed 42 baseline results; reconstruction, not verified identical to Smith et al. E5",
+  "entries": [
+    {
+      "idea": "vanilla_w2s",
+      "source_member": "cache_results/cache_results/chat-0115_vanilla_w2s/Qwen_Qwen3_4B_Base_Qwen_Qwen1_5_0_5B_Chat_e5_lr0.0001_bs32_schlinear/seed_42.json",
+      "metrics": {
+        "weak_acc": 0.5439429928741093,
+        "strong_acc": 0.7300079176563737,
+        "transfer_acc": 0.604117181314331,
+        "pgr": 0.37227866473149535
+      },
+      "forum_file": "forum/0001_vanilla_w2s.json"
+    },
+    {
+      "idea": "train_only_on_confident_labels",
+      "source_member": "cache_results/cache_results/chat-0115_train_only_on_confident_labels/Qwen_Qwen3_4B_Base_Qwen_Qwen1_5_0_5B_Chat_e5_lr0.0001_bs32_schlinear_conf_high0.75_conf_low0.25/seed_42.json",
+      "metrics": {
+        "weak_acc": 0.5439429928741093,
+        "strong_acc": 0.7300079176563737,
+        "transfer_acc": 0.6104513064133017,
+        "pgr": 0.4032414126753753
+      },
+      "forum_file": "forum/0002_train_only_on_confident_labels.json"
+    },
+    {
+      "idea": "ue_zeroshot",
+      "source_member": "cache_results/cache_results/chat-0115_ue_zeroshot/Qwen_Qwen3_4B_Base_Qwen_Qwen1_5_0_5B_Chat_e5_lr0.0001_bs32_schlinear/seed_42.json",
+      "metrics": {
+        "weak_acc": 0.5439429928741093,
+        "strong_acc": 0.7300079176563737,
+        "transfer_acc": 0.5202058590656373,
+        "pgr": -0.038
+      },
+      "forum_file": "forum/0003_ue_zeroshot.json"
+    },
+    {
+      "idea": "critic",
+      "source_member": "cache_results/cache_results/chat-0115_critic/Qwen_Qwen3_4B_Base_Qwen_Qwen1_5_0_5B_Chat_e5_lr0.0001_bs32_schlinear_grpo_kl_penalty0.02_grpo_lr1e-05_grpo_max_steps50_sft_critic_num_samples3000/seed_42.json",
+      "metrics": {
+        "weak_acc": 0.5439429928741093,
+        "strong_acc": 0.7300079176563737,
+        "transfer_acc": 0.5043547110055424,
+        "pgr": -0.11538461538461486
+      },
+      "forum_file": "forum/0004_critic.json"
+    }
+  ]
+}

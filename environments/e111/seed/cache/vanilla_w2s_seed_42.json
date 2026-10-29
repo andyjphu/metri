@@ -1,0 +1,175 @@
+{
+  "idea_name": "vanilla_w2s",
+  "weak_model": "Qwen/Qwen1.5-0.5B-Chat",
+  "strong_model": "Qwen/Qwen3-4B-Base",
+  "weak_acc": 0.5439429928741093,
+  "hard_weak_label_acc": 0.6044535599179608,
+  "strong_acc": 0.7300079176563737,
+  "transfer_acc": 0.604117181314331,
+  "pgr": 0.37227866473149535,
+  "fixed_weak_baseline": 0.5279592240696753,
+  "fixed_strong_baseline": 0.7325316706254948,
+  "training_time": 6378.6877501010895,
+  "aar_mode": false,
+  "config": {
+    "epochs": 5,
+    "baseline_epochs": 5,
+    "lr": 0.0001,
+    "batch_size": 32,
+    "seed": 42,
+    "loss": "xent",
+    "lora_r": 32,
+    "lora_alpha": 32,
+    "lora_dropout": 0.0,
+    "load_in_4bit": false
+  },
+  "detailed_eval": {
+    "weak": {
+      "final_eval": {
+        "accuracy": 0.5439429928741093
+      }
+    },
+    "strong": {
+      "final_eval": {
+        "accuracy": 0.604117181314331,
+        "correct": 763,
+        "total": 1263,
+        "pred_distribution": {
+          "0": 698,
+          "1": 565
+        },
+        "label_distribution": {
+          "1": 639,
+          "0": 624
+        },
+        "per_subset": {
+          "helpsteer2_validation": {
+            "accuracy": 0.5922865013774105,
+            "correct": 215,
+            "total": 363,
+            "pred_distribution": {
+              "1": 162,
+              "0": 201
+            },
+            "label_distribution": {
+              "1": 174,
+              "0": 189
+            }
+          },
+          "helpsteer3_validation": {
+            "accuracy": 0.636,
+            "correct": 318,
+            "total": 500,
+            "pred_distribution": {
+              "0": 245,
+              "1": 255
+            },
+            "label_distribution": {
+              "1": 261,
+              "0": 239
+            }
+          },
+          "reward_bench_2_test_Focus": {
+            "accuracy": 0.59,
+            "correct": 118,
+            "total": 200,
+            "pred_distribution": {
+              "1": 88,
+              "0": 112
+            },
+            "label_distribution": {
+              "1": 106,
+              "0": 94
+            }
+          },
+          "rm_bench_chat": {
+            "accuracy": 0.56,
+            "correct": 112,
+            "total": 200,
+            "pred_distribution": {
+              "0": 140,
+              "1": 60
+            },
+            "label_distribution": {
+              "1": 98,
+              "0": 102
+            }
+          }
+        }
+      }
+    },
+    "ceiling": {
+      "final_eval": {
+        "accuracy": 0.7300079176563737,
+        "correct": 922,
+        "total": 1263,
+        "pred_distribution": {
+          "0": 647,
+          "1": 616
+        },
+        "label_distribution": {
+          "1": 639,
+          "0": 624
+        },
+        "per_subset": {
+          "helpsteer2_validation": {
+            "accuracy": 0.7272727272727273,
+            "correct": 264,
+            "total": 363,
+            "pred_distribution": {
+              "1": 181,
+              "0": 182
+            },
+            "label_distribution": {
+              "1": 174,
+              "0": 189
+            }
+          },
+          "helpsteer3_validation": {
+            "accuracy": 0.68,
+            "correct": 340,
+            "total": 500,
+            "pred_distribution": {
+              "0": 249,
+              "1": 251
+            },
+            "label_distribution": {
+              "1": 261,
+              "0": 239
+            }
+          },
+          "reward_bench_2_test_Focus": {
+            "accuracy": 0.89,
+            "correct": 178,
+            "total": 200,
+            "pred_distribution": {
+              "1": 108,
+              "0": 92
+            },
+            "label_distribution": {
+              "1": 106,
+              "0": 94
+            }
+          },
+          "rm_bench_chat": {
+            "accuracy": 0.7,
+            "correct": 140,
+            "total": 200,
+            "pred_distribution": {
+              "1": 76,
+              "0": 124
+            },
+            "label_distribution": {
+              "1": 98,
+              "0": 102
+            }
+          }
+        }
+      }
+    }
+  },
+  "cached_at": "2026-01-16 11:08:25",
+  "seed": 42,
+  "hyperparam_config_key": "Qwen_Qwen3_4B_Base_Qwen_Qwen1_5_0_5B_Chat_e5_lr0.0001_bs32_schlinear",
+  "dataset_name": "chat-0115"
+}
