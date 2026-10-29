@@ -16,7 +16,7 @@ import yaml
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 
 HERE = Path(__file__).resolve().parent
@@ -26,6 +26,7 @@ EVENTS_FILE = DATA / "events.jsonl"
 LOCK = threading.RLock()
 API_URL = "https://api.openai.com/v1/responses"
 OPENROUTER_URL = "https://openrouter.ai/api/v1/responses"
+SWAP_MODELS_FILE = HERE / "swap_models.yml"
 CODEX_THREAD_ID = os.environ.get("METRI_CODEX_THREAD_ID") or os.environ.get("CODEX_THREAD_ID")
 
 
@@ -320,17 +321,48 @@ def call_api(payload):
         raise RuntimeError(f"OpenAI HTTP {exc.code}: {body[:2500]}") from exc
 
 
-def call_openrouter(original, model):
+def swap_models():
+    source = yaml.safe_load(SWAP_MODELS_FILE.read_text())
+    choices = source.get("models") if isinstance(source, dict) else None
+    if not isinstance(choices, list) or not choices:
+        raise ValueError("swap_models.yml needs a nonempty models list.")
+    seen = set()
+    for option in choices:
+        if (not isinstance(option, dict)
+                or not isinstance(option.get("id"), str)
+                or not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,63}", option["id"])
+                or option["id"] in seen
+                or not isinstance(option.get("label"), str)
+                or not option["label"].strip()
+                or option.get("provider") not in {"openai", "openrouter"}
+                or not isinstance(option.get("model"), str)
+                or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:/~+-]{0,127}", option["model"])
+                or option.get("reasoning_effort") not in {"low", "medium", "high", "xhigh", "max"}
+                or type(option.get("max_output_tokens")) is not int
+                or not 1 <= option["max_output_tokens"] <= 100_000):
+            raise ValueError("Invalid or duplicate model in swap_models.yml.")
+        seen.add(option["id"])
+    return choices
+
+
+def call_swap_model(original, option):
+    payload = {field: copy.deepcopy(original[field]) for field in
+               ("instructions", "input", "tools", "tool_choice")
+               if field in original}
+    payload["model"] = option["model"]
+    payload["store"] = False
+    payload["max_output_tokens"] = option["max_output_tokens"]
+    payload["reasoning"] = {"effort": option["reasoning_effort"]}
+    payload["input"] = [item for item in payload["input"] if item.get("type") != "reasoning"]
+    if option["provider"] == "openai":
+        payload["reasoning"]["summary"] = "auto"
+        result = call_api(payload)
+        validate_target(result)
+        return result
     key = os.environ.get("OPENROUTER_API_KEY")
     if not key:
         raise RuntimeError("Set OPENROUTER_API_KEY before starting Metri.")
-    payload = {field: copy.deepcopy(original[field]) for field in
-               ("instructions", "input", "tools", "tool_choice", "max_output_tokens", "temperature", "top_p")
-               if field in original}
-    payload["model"] = model
-    payload["store"] = False
-    payload["reasoning"] = {"effort": "high", "exclude": False}
-    payload["input"] = [item for item in payload["input"] if item.get("type") != "reasoning"]
+    payload["reasoning"]["exclude"] = False
     request = urllib.request.Request(
         OPENROUTER_URL, data=json.dumps(payload).encode(), method="POST",
         headers={"Authorization": "Bearer " + key, "Content-Type": "application/json"},
@@ -798,9 +830,57 @@ def run_approved(entry_id):
             event("request_failed", entry_id=entry_id, error=str(exc))
 
 
-def run_model_swap(trace_id, target_id, target_revision, request, model):
+def response_variants(state, trace_id, target):
+    index = state["entries"].index(target)
+    source = parsed(state["entries"][index - 1])
+    active = parsed(target)
+    variants = [{"id": "active", "model": active.get("model", "Unknown model"),
+                 "created_at": active.get("created_at"), "active": True}]
+    prefix = f"swap-{trace_id}-{target['id']}-"
+    for file in sorted((DATA / "archive").glob(f"{prefix}*/session.json"), reverse=True):
+        try:
+            snapshot = json.loads(file.read_text())
+            entries = snapshot["entries"]
+            if (len(entries) <= index or entries[index]["side"] != "gray"
+                    or parsed(entries[index - 1]) != source):
+                continue
+            prior = parsed(entries[index])
+            validate_target(prior)
+        except (OSError, ValueError, KeyError, IndexError, TypeError):
+            continue
+        variants.append({"id": file.parent.name, "model": prior.get("model", "Unknown model"),
+                         "created_at": prior.get("created_at"), "active": False})
+    return variants
+
+
+def replace_gray(state, trace_id, target, raw_response, event_kind, **details):
+    target_id = target["id"]
+    archive = DATA / "archive" / f"swap-{trace_id}-{target_id}-{datetime.now(timezone.utc):%Y%m%dT%H%M%S%fZ}"
+    archive.mkdir(parents=True)
+    archived = copy.deepcopy(state)
+    archived["busy"] = None
+    (archive / "session.json").write_text(dump(archived) + "\n")
+    if EVENTS_FILE.exists():
+        shutil.copy2(EVENTS_FILE, archive / "events.jsonl")
+    index = state["entries"].index(target)
+    removed_ids = [entry["id"] for entry in state["entries"][index + 1:]]
+    state["entries"] = state["entries"][:index + 1]
+    compact_ids(state)
+    before = target["current_text"]
+    state["busy"] = None
+    state["run_complete"] = False
+    update_entry(state, target_id, raw_response)
+    state["error"] = None
+    save_state(state)
+    event(event_kind, entry_id=target_id, removed_ids=removed_ids,
+          archive=str(archive.relative_to(DATA)), before_sha256=sha(before),
+          after_sha256=sha(target["current_text"]), **details)
+    queue_next_draft(state, "gray response replaced")
+
+
+def run_model_swap(trace_id, target_id, target_revision, request, option):
     try:
-        response = call_openrouter(request, model)
+        response = call_swap_model(request, option)
         with LOCK:
             state = load_state()
             target = current_entry(state, target_id)
@@ -808,27 +888,8 @@ def run_model_swap(trace_id, target_id, target_revision, request, model):
                     or target["revision"] != target_revision
                     or state["busy"] != {"kind": "swap", "entry_id": target_id}):
                 return
-            archive = DATA / "archive" / f"swap-{trace_id}-{target_id}-{datetime.now(timezone.utc):%Y%m%dT%H%M%S%fZ}"
-            archive.mkdir(parents=True)
-            archived = copy.deepcopy(state)
-            archived["busy"] = None
-            (archive / "session.json").write_text(dump(archived) + "\n")
-            if EVENTS_FILE.exists():
-                shutil.copy2(EVENTS_FILE, archive / "events.jsonl")
-            index = state["entries"].index(target)
-            removed_ids = [entry["id"] for entry in state["entries"][index + 1:]]
-            state["entries"] = state["entries"][:index + 1]
-            compact_ids(state)
-            before = target["current_text"]
-            state["busy"] = None
-            state["run_complete"] = False
-            update_entry(state, target_id, dump(response))
-            state["error"] = None
-            save_state(state)
-            event("gray_swapped", entry_id=target_id, model=model, removed_ids=removed_ids,
-                  archive=str(archive.relative_to(DATA)), before_sha256=sha(before),
-                  after_sha256=sha(target["current_text"]), source_request=request)
-            queue_next_draft(state, "gray response replaced")
+            replace_gray(state, trace_id, target, dump(response), "gray_swapped",
+                         option=option, source_request=request)
     except Exception as exc:
         with LOCK:
             state = load_state()
@@ -855,6 +916,12 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         path = urlparse(self.path).path
+        if path == "/api/swap-models":
+            try:
+                self.send(200, {"models": swap_models()})
+            except (OSError, yaml.YAMLError, ValueError) as exc:
+                self.send(500, {"error": f"Cannot load model choices: {exc}"})
+            return
         if path == "/api/rail":
             with LOCK:
                 trace_id = load_traces()["active"]
@@ -880,6 +947,18 @@ class Handler(BaseHTTPRequestHandler):
                     )})
                 except (yaml.YAMLError, ValueError) as exc:
                     self.send(400, {"error": f"Invalid rail YAML: {exc}"})
+            return
+        if path == "/api/response-variants":
+            with LOCK:
+                state = load_state()
+                try:
+                    target_id = int(parse_qs(urlparse(self.path).query).get("id", [""])[0])
+                    target = current_entry(state, target_id)
+                    if not target or target["side"] != "gray":
+                        raise ValueError("Choose a gray response.")
+                    self.send(200, {"variants": response_variants(state, load_traces()["active"], target)})
+                except (ValueError, TypeError) as exc:
+                    self.send(400, {"error": str(exc)})
             return
         if path == "/api/traces":
             with LOCK:
@@ -1066,10 +1145,10 @@ class Handler(BaseHTTPRequestHandler):
                     target = current_entry(state, int(data["id"]))
                     if not target or target["side"] != "gray":
                         raise ValueError("Choose a gray response to replace.")
-                    model = data.get("model")
-                    if not isinstance(model, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:/~+-]{0,127}", model):
-                        raise ValueError("Enter an OpenRouter model ID.")
-                    if not os.environ.get("OPENROUTER_API_KEY"):
+                    option = next((item for item in swap_models() if item["id"] == data.get("option")), None)
+                    if option is None:
+                        raise ValueError("Choose a configured model.")
+                    if option["provider"] == "openrouter" and not os.environ.get("OPENROUTER_API_KEY"):
                         raise ValueError("Set OPENROUTER_API_KEY before starting Metri.")
                     index = state["entries"].index(target)
                     source = parsed(state["entries"][index - 1])
@@ -1082,11 +1161,31 @@ class Handler(BaseHTTPRequestHandler):
                     state["error"] = None
                     trace_id = load_traces()["active"]
                     save_state(state)
-                    event("gray_swap_requested", entry_id=target["id"], model=model)
+                    event("gray_swap_requested", entry_id=target["id"], option=option)
                     self.send(202, {"ok": True})
                     threading.Thread(target=run_model_swap,
-                                     args=(trace_id, target["id"], target["revision"], source, model),
+                                     args=(trace_id, target["id"], target["revision"], source, option),
                                      daemon=True).start()
+                    return
+                if path == "/api/select-response-variant":
+                    if state["auto_mode"] or state["busy"]:
+                        raise ValueError("Turn Auto off and wait for the current response.")
+                    target = current_entry(state, int(data["id"]))
+                    if not target or target["side"] != "gray":
+                        raise ValueError("Choose a gray response.")
+                    trace_id = load_traces()["active"]
+                    variant_id = data.get("variant")
+                    allowed = {item["id"] for item in response_variants(state, trace_id, target)}
+                    if variant_id == "active" or variant_id not in allowed:
+                        raise ValueError("Choose an earlier response for this request.")
+                    archive = DATA / "archive" / variant_id / "session.json"
+                    snapshot = json.loads(archive.read_text())
+                    index = state["entries"].index(target)
+                    raw_response = snapshot["entries"][index]["current_text"]
+                    validate_target(json.loads(raw_response))
+                    replace_gray(state, trace_id, target, raw_response, "gray_variant_selected",
+                                 selected_variant=variant_id)
+                    self.send(200, {"ok": True})
                     return
                 if path in {"/api/approve", "/api/auto-send"}:
                     if state["run_complete"]:

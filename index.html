@@ -60,11 +60,16 @@
     <form id="swap-form">
       <div id="swap-title" class="swap-title">Replace response</div>
       <div id="swap-detail" class="swap-detail"></div>
-      <label for="swap-model">OpenRouter model</label>
-      <input id="swap-model" name="model" list="swap-models" autocomplete="off" spellcheck="false" required>
-      <datalist id="swap-models"><option value="z-ai/glm-5.3"><option value="z-ai/glm-5.3-flash"></datalist>
+      <div id="swap-existing">
+        <div id="swap-variants" class="swap-options" role="radiogroup" aria-label="Generated responses"></div>
+        <button id="swap-new" class="swap-new" type="button"><span aria-hidden="true">+</span> New response</button>
+      </div>
+      <div id="swap-generate" hidden>
+        <button id="swap-back" class="swap-back" type="button">‹ Responses</button>
+        <div id="swap-options" class="swap-options" role="radiogroup" aria-label="Model"></div>
+      </div>
       <div id="swap-error" class="swap-error" role="alert" hidden></div>
-      <div class="swap-actions"><button type="button" id="swap-cancel">Cancel</button><button type="submit" id="swap-submit">Replace</button></div>
+      <div class="swap-actions"><button type="button" id="swap-cancel">Cancel</button><button type="submit" id="swap-submit">Use response</button></div>
     </form>
   </dialog>
   <script src="/app.js"></script>

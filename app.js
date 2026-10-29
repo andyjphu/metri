@@ -42,11 +42,14 @@
   let railPoints = [];
   let railSignature = "";
   let railFrame = null;
+  let messageSearch = null;
+  let messageMatches = [];
   const renderedEditors = new Set();
   const pencil = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4l11.1-11.1a2.1 2.1 0 0 0-3-3L5 17v3Z"/><path d="m14.7 7.3 3 3"/></svg>';
   const rewindIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 7-4 4 4 4"/><path d="M5 11h10a5 5 0 0 1 0 10h-2"/></svg>';
   const refreshIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.4 6.6"/><path d="M20 5v6h-6"/></svg>';
   const swapIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h16m-4-4 4 4-4 4M20 16H4m4-4-4 4 4 4"/></svg>';
+  const searchIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.8" cy="10.8" r="6.3"/><path d="m16 16 4.2 4.2"/></svg>';
   const approveIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 4.5 4.5L19 7"/></svg>';
   const collapseIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>';
 
@@ -415,6 +418,77 @@
     if (railFrame === null) railFrame = requestAnimationFrame(layoutRail);
   }
 
+  function updateMessageSearch(reveal = false) {
+    if (!messageSearch) return;
+    const article = $(`#m-${messageSearch.id}`);
+    if (!article) { messageSearch = null; messageMatches = []; return; }
+    article.querySelectorAll("mark.message-search-hit").forEach((mark) => {
+      const parent = mark.parentNode;
+      mark.replaceWith(document.createTextNode(mark.textContent));
+      parent.normalize();
+    });
+    messageMatches = [];
+    const query = messageSearch.query.toLowerCase();
+    if (query) {
+      const editors = article.querySelectorAll(".raw-editor, .editing .render-editor textarea");
+      if (editors.length) {
+        for (const editor of editors) {
+          const text = editor.value.toLowerCase();
+          let at = 0;
+          while ((at = text.indexOf(query, at)) !== -1 && messageMatches.length < 500) {
+            messageMatches.push({editor, start: at, end: at + query.length});
+            at += Math.max(query.length, 1);
+          }
+        }
+      } else {
+        const root = article.querySelector(".message-text");
+        if (root) {
+          const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+          const nodes = [];
+          while (walker.nextNode()) nodes.push(walker.currentNode);
+          for (const node of nodes) {
+            if (messageMatches.length >= 500) break;
+            const value = node.nodeValue;
+            const lower = value.toLowerCase();
+            let at = 0;
+            let previous = 0;
+            const fragment = document.createDocumentFragment();
+            while ((at = lower.indexOf(query, at)) !== -1 && messageMatches.length < 500) {
+              fragment.append(document.createTextNode(value.slice(previous, at)));
+              const mark = document.createElement("mark");
+              mark.className = "message-search-hit";
+              mark.textContent = value.slice(at, at + query.length);
+              fragment.append(mark);
+              messageMatches.push({mark});
+              previous = at + query.length;
+              at = previous;
+            }
+            if (previous) {
+              fragment.append(document.createTextNode(value.slice(previous)));
+              node.replaceWith(fragment);
+            }
+          }
+        }
+      }
+    }
+    if (messageSearch.index >= messageMatches.length) messageSearch.index = 0;
+    const count = article.querySelector(".message-search-count");
+    if (count) count.textContent = query ? `${messageMatches.length ? messageSearch.index + 1 : 0}/${messageMatches.length}${messageMatches.length === 500 ? "+" : ""}` : "";
+    messageMatches.forEach((match, index) => match.mark?.classList.toggle("current", index === messageSearch.index));
+    if (reveal && messageMatches.length) {
+      const match = messageMatches[messageSearch.index];
+      if (match.mark) match.mark.scrollIntoView({block: "nearest"});
+      else {
+        match.editor.focus({preventScroll: true});
+        match.editor.setSelectionRange(match.start, match.end);
+        const lines = match.editor.value.slice(0, match.start).split("\n").length - 1;
+        const lineHeight = Number.parseFloat(getComputedStyle(match.editor).lineHeight) || 18;
+        match.editor.scrollTop = Math.max(0, lines * lineHeight - match.editor.clientHeight / 2);
+        article.querySelector(".message-search-input")?.focus({preventScroll: true});
+      }
+    }
+  }
+
   async function finishEdits() {
     for (const id of [...edits.keys()]) await saveEdit(id);
     await Promise.all([...saving.values()]);
@@ -469,6 +543,7 @@
   function render() {
     if (!state) return;
     const focused = document.activeElement?.tagName === "TEXTAREA" ? document.activeElement : null;
+    const searchFocused = document.activeElement?.classList.contains("message-search-input") === true;
     const focusedId = focused ? Number(focused.dataset.id) : null;
     const focusedPath = focused?.dataset.editorPath ?? null;
     const selection = focused ? [focused.selectionStart, focused.selectionEnd, focused.selectionDirection] : null;
@@ -487,6 +562,7 @@
     for (const id of renderedEditors) if (!entries.some((entry) => entry.id === id)) renderedEditors.delete(id);
     for (const id of collapseOverrides.keys()) if (!entries.some((entry) => entry.id === id)) collapseOverrides.delete(id);
     for (const id of previewCache.keys()) if (!entries.some((entry) => entry.id === id)) previewCache.delete(id);
+    if (messageSearch && !entries.some((entry) => entry.id === messageSearch.id)) messageSearch = null;
     showNotice(state.error || "", !!state.error);
     updateSaveStatus();
     updateStatusIndicators();
@@ -508,7 +584,10 @@
       const caret = `<button class="collapse" type="button" title="${collapsed ? "Expand" : "Collapse"} bubble" aria-label="${collapsed ? "Expand" : "Collapse"} bubble" aria-expanded="${!collapsed}" data-action="collapse">${collapseIcon}</button>`;
       const swappable = entry.side === "gray" && !state.busy && !state.auto_mode;
       const swap = swappable ? button(swapIcon, "Replace response with another model", "swap-model") : "";
-      const taps = `<div class="tapback"><div class="tapback-extra">${controls}${swap}${pen}</div>${caret}</div>`;
+      const find = button(searchIcon, "Find in this message", "search-message");
+      const taps = `<div class="tapback"><div class="tapback-extra">${controls}${swap}${find}${pen}</div>${caret}</div>`;
+      const searchBar = messageSearch?.id === entry.id ?
+        `<div class="message-search"><input class="message-search-input" type="search" aria-label="Find in message #${index + 1}" value="${escapeHtml(messageSearch.query)}" autocomplete="off"><span class="message-search-count"></span><button type="button" data-action="close-search" aria-label="Close message search">×</button></div>` : "";
       const editors = editing ? `<div class="render-editors">${editableParts(entry).map((part) =>
         `<label class="render-editor"><span>${escapeHtml(part.label)}</span><textarea spellcheck="false" data-id="${entry.id}" data-editor-path="${escapeHtml(part.path ? JSON.stringify(part.path) : "")}"></textarea></label>`
       ).join("")}</div>` : "";
@@ -517,7 +596,7 @@
       const railKind = entry.side === "gray" ? (desc.startsWith("Tool call") ? "agent-tool" : "agent-text") : "";
       const message = `<article class="message ${entry.side} ${railKind} ${collapsed ? "collapsed" : ""} ${entry.id === selected ? "selected" : ""} ${editing ? "editing" : ""}" id="m-${entry.id}" data-id="${entry.id}">
         <div class="message-head">#${index + 1} · ${escapeHtml(desc)}</div>
-        <div class="bubble">${taps}<div class="collapsed-preview ${viewMode}">${escapeHtml(preview)}</div><div class="expanded-content">${viewMode === "raw" ? `<textarea class="raw-editor" spellcheck="false" aria-label="${escapeHtml(label(entry))} JSON" data-id="${entry.id}" ${editable ? "" : "readonly"}></textarea>` : `<div class="message-text ${viewMode}" data-id="${entry.id}"></div>${editors}`}</div></div>
+        <div class="bubble">${taps}${searchBar}<div class="collapsed-preview ${viewMode}">${escapeHtml(preview)}</div><div class="expanded-content">${viewMode === "raw" ? `<textarea class="raw-editor" spellcheck="false" aria-label="${escapeHtml(label(entry))} JSON" data-id="${entry.id}" ${editable ? "" : "readonly"}></textarea>` : `<div class="message-text ${viewMode}" data-id="${entry.id}"></div>${editors}`}</div></div>
       </article>`;
       const auditor = (auditorByGray.get(entry.id) || []).map((exchange) => {
         const pendingAnswer = exchange.answer == null && state.auditor_exchange?.at(-1)?.question === exchange.question &&
@@ -567,6 +646,8 @@
         el.scrollLeft = scroll.left;
       }
     }
+    updateMessageSearch();
+    if (searchFocused) $(`#m-${messageSearch?.id} .message-search-input`)?.focus({preventScroll: true});
     queueVisiblePreviews();
     scheduleRailLayout();
   }
@@ -596,8 +677,8 @@
     selected = Number(id) || null;
     $("#stream").querySelectorAll(".message").forEach((el) => el.classList.toggle("selected", Number(el.dataset.id) === selected));
     if (selected) {
-      location.hash = `m-${selected}`;
-      $(`#m-${selected}`)?.scrollIntoView({behavior: "smooth", block: "center"});
+      history.replaceState(null, "", `#m-${selected}`);
+      $(`#m-${selected}`)?.scrollIntoView({block: "start"});
     }
   }
 
@@ -747,7 +828,26 @@
     const last = state.entries.at(-1);
     if (name === "approve" && sendingId !== null) return;
     try {
-      if (name === "collapse") {
+      if (name === "search-message") {
+        if (messageSearch?.id === id) {
+          messageSearch = null;
+          messageMatches = [];
+        } else {
+          messageSearch = {id, query: "", index: 0};
+          if (isCollapsed(state.entries.find((entry) => entry.id === id))) {
+            collapseOverrides.set(id, false);
+            saveCollapsePreferences();
+          }
+        }
+        await refresh(true, true);
+        $(`#m-${id} .message-search-input`)?.focus({preventScroll: true});
+        return;
+      } else if (name === "close-search") {
+        messageSearch = null;
+        messageMatches = [];
+        await refresh(true, true);
+        return;
+      } else if (name === "collapse") {
         await saveEdit(id);
         const entry = state.entries.find((item) => item.id === id);
         if (!entry) return;
@@ -797,14 +897,35 @@
       } else if (name === "swap-model") {
         const index = state.entries.findIndex((entry) => entry.id === id);
         if (index < 0) return;
+        const [modelResponse, variantResponse] = await Promise.all([
+          fetch("/api/swap-models", {cache: "no-store"}),
+          fetch(`/api/response-variants?id=${id}`, {cache: "no-store"})
+        ]);
+        const [modelResult, variantResult] = await Promise.all([modelResponse.json(), variantResponse.json()]);
+        if (!modelResponse.ok) throw Error(modelResult.error || "Could not load model choices.");
+        if (!variantResponse.ok) throw Error(variantResult.error || "Could not load earlier responses.");
+        const saved = storedValue(swapModelKey);
+        const selectedOption = modelResult.models.some((option) => option.id === saved) ? saved : modelResult.models[0]?.id;
+        $("#swap-options").innerHTML = modelResult.models.map((option) =>
+          `<label class="swap-option"><input type="radio" name="swap-option" value="${escapeHtml(option.id)}" ${option.id === selectedOption ? "checked" : ""}><span>${escapeHtml(option.label)}</span></label>`
+        ).join("");
+        $("#swap-variants").innerHTML = variantResult.variants.map((variant) => {
+          const when = variant.created_at ? new Date(variant.created_at * 1000).toLocaleString() : "";
+          return `<label class="swap-option"><input type="radio" name="swap-variant" value="${escapeHtml(variant.id)}" ${variant.active ? "checked" : ""}><span>${variant.active ? "Current" : "Earlier"} · ${escapeHtml(variant.model)}</span>${when ? `<small>${escapeHtml(when)}</small>` : ""}</label>`;
+        }).join("");
         const later = state.entries.length - index - 1;
         const dialog = $("#swap-dialog");
         dialog.dataset.id = id;
+        dialog.dataset.mode = "existing";
+        $("#swap-title").textContent = "Replace response";
+        $("#swap-existing").hidden = false;
+        $("#swap-generate").hidden = true;
+        $("#swap-submit").textContent = "Use response";
+        $("#swap-submit").disabled = true;
         $("#swap-detail").textContent = later ? `Later ${later} bubble${later === 1 ? "" : "s"} will be archived and removed.` : `Gray #${id} will be replaced.`;
-        $("#swap-model").value = storedValue(swapModelKey) || "z-ai/glm-5.3";
         $("#swap-error").hidden = true;
         dialog.showModal();
-        $("#swap-model").focus();
+        $("#swap-new").focus();
         return;
       } else if (name === "rewind") {
         const index = state.entries.findIndex((entry) => entry.id === id);
@@ -857,6 +978,13 @@
   }
 
   document.addEventListener("input", (event) => {
+    if (event.target.classList?.contains("message-search-input")) {
+      if (!messageSearch) return;
+      messageSearch.query = event.target.value;
+      messageSearch.index = 0;
+      updateMessageSearch(true);
+      return;
+    }
     if (event.target.tagName !== "TEXTAREA") return;
     const id = Number(event.target.dataset.id);
     let raw = event.target.value;
@@ -869,6 +997,7 @@
       raw = JSON.stringify(value, null, 2);
     }
     edits.set(id, raw);
+    if (messageSearch?.id === id) updateMessageSearch();
     if (viewMode === "rendered") {
       const entry = state.entries.find((item) => item.id === id);
       const preview = $(`#m-${id} .message-text`);
@@ -884,24 +1013,66 @@
   document.addEventListener("blur", (event) => {
     if (event.target.tagName === "TEXTAREA") saveEdit(Number(event.target.dataset.id)).catch(() => {});
   }, true);
+  document.addEventListener("keydown", (event) => {
+    if (!event.target.classList?.contains("message-search-input") || !messageSearch) return;
+    if (event.key === "Escape") {
+      event.preventDefault();
+      action("close-search", messageSearch.id);
+    } else if (event.key === "Enter") {
+      event.preventDefault();
+      if (!messageMatches.length) return;
+      messageSearch.index = (messageSearch.index + (event.shiftKey ? -1 : 1) + messageMatches.length) % messageMatches.length;
+      updateMessageSearch(true);
+    }
+  });
   document.addEventListener("click", (event) => {
     const btn = event.target.closest("[data-action]");
     if (!btn) return;
     action(btn.dataset.action, Number(btn.closest(".message")?.dataset.id || state.entries.at(-1).id));
   });
   $("#swap-cancel").addEventListener("click", () => $("#swap-dialog").close());
+  $("#swap-new").addEventListener("click", () => {
+    $("#swap-dialog").dataset.mode = "generate";
+    $("#swap-title").textContent = "New response";
+    $("#swap-existing").hidden = true;
+    $("#swap-generate").hidden = false;
+    $("#swap-submit").textContent = "Generate";
+    $("#swap-submit").disabled = false;
+    $("#swap-error").hidden = true;
+    $("#swap-options input:checked")?.focus();
+  });
+  $("#swap-back").addEventListener("click", () => {
+    $("#swap-dialog").dataset.mode = "existing";
+    $("#swap-title").textContent = "Replace response";
+    $("#swap-existing").hidden = false;
+    $("#swap-generate").hidden = true;
+    $("#swap-submit").textContent = "Use response";
+    $("#swap-submit").disabled = $("#swap-variants input:checked")?.value === "active";
+    $("#swap-new").focus();
+  });
+  $("#swap-variants").addEventListener("change", () => {
+    $("#swap-submit").disabled = $("#swap-variants input:checked")?.value === "active";
+  });
   $("#swap-form").addEventListener("submit", async (event) => {
     event.preventDefault();
     const dialog = $("#swap-dialog");
     const submit = $("#swap-submit");
     const error = $("#swap-error");
-    const model = $("#swap-model").value.trim();
+    const generation = dialog.dataset.mode === "generate";
+    const option = $("#swap-options input:checked")?.value;
+    const variant = $("#swap-variants input:checked")?.value;
     submit.disabled = true;
     error.hidden = true;
     try {
       await finishEdits();
-      await api("/api/swap-model", {id: Number(dialog.dataset.id), model});
-      storeValue(swapModelKey, model);
+      if (generation) {
+        if (!option) throw Error("Choose a model.");
+        await api("/api/swap-model", {id: Number(dialog.dataset.id), option});
+        storeValue(swapModelKey, option);
+      } else {
+        if (!variant || variant === "active") throw Error("Choose an earlier response.");
+        await api("/api/select-response-variant", {id: Number(dialog.dataset.id), variant});
+      }
       selected = Number(dialog.dataset.id);
       dialog.close();
       await refresh(true, true);

@@ -1,6 +1,7 @@
 """End-to-end checks for the approval and edit boundary, without API spend."""
 
 import copy
+import io
 import json
 import tempfile
 import threading
@@ -18,7 +19,7 @@ class MetriTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.original = (server.DATA, server.STATE_FILE, server.EVENTS_FILE, server.call_api,
-                         server.call_openrouter, server.CODEX_THREAD_ID)
+                         server.call_swap_model, server.CODEX_THREAD_ID)
         server.DATA = Path(self.tmp.name)
         server.STATE_FILE = server.DATA / "session.json"
         server.EVENTS_FILE = server.DATA / "events.jsonl"
@@ -53,7 +54,7 @@ class MetriTest(unittest.TestCase):
         self.http.server_close()
         self.thread.join(timeout=2)
         (server.DATA, server.STATE_FILE, server.EVENTS_FILE, server.call_api,
-         server.call_openrouter, server.CODEX_THREAD_ID) = self.original
+         server.call_swap_model, server.CODEX_THREAD_ID) = self.original
         self.tmp.cleanup()
 
     def get(self):
@@ -81,6 +82,34 @@ class MetriTest(unittest.TestCase):
             urllib.request.urlopen(self.base + "/api/rail")
         self.assertEqual(error.exception.code, 400)
         error.exception.close()
+
+    def test_swap_choices_are_configured_and_sol_uses_high_reasoning(self):
+        with urllib.request.urlopen(self.base + "/api/swap-models") as reply:
+            choices = json.load(reply)["models"]
+        self.assertEqual([item["id"] for item in choices], ["glm-high", "sol-high"])
+        original = {"instructions": "Test", "input": [{"role": "user", "content": "Hello"},
+                    {"type": "reasoning", "encrypted_content": "prior-model-only"}],
+                    "max_output_tokens": 3000, "temperature": 0.5}
+        server.call_swap_model(original, choices[1])
+        sent = self.target_requests[-1]
+        self.assertEqual(sent["model"], "gpt-6-sol")
+        self.assertEqual(sent["reasoning"], {"effort": "high", "summary": "auto"})
+        self.assertEqual(sent["max_output_tokens"], 12000)
+        self.assertNotIn("temperature", sent)
+        self.assertEqual(sent["input"], [{"role": "user", "content": "Hello"}])
+        seen = []
+        def fake_openrouter(request, timeout):
+            seen.append(json.loads(request.data))
+            return io.BytesIO(json.dumps({"model": "z-ai/glm-5.3", "output": [
+                {"type": "message", "role": "assistant", "content": [
+                    {"type": "output_text", "text": "Done"}]}]}).encode())
+        with mock.patch.dict("os.environ", {"OPENROUTER_API_KEY": "test-key"}), \
+                mock.patch.object(server.urllib.request, "urlopen", fake_openrouter):
+            server.call_swap_model(original, choices[0])
+        self.assertEqual(seen[0]["model"], "z-ai/glm-5.3")
+        self.assertEqual(seen[0]["reasoning"], {"effort": "high", "exclude": False})
+        self.assertEqual(seen[0]["max_output_tokens"], 12000)
+        self.assertNotIn("temperature", seen[0])
 
     def post(self, action, payload):
         req = urllib.request.Request(self.base + "/api/" + action,
@@ -251,18 +280,18 @@ class MetriTest(unittest.TestCase):
         self.post("codex-draft", {"request": draft})
         original = json.loads(gray["current_text"])
         seen = []
-        def fake_model(request, model):
-            seen.append((copy.deepcopy(request), model))
-            return {"model": model, "output": [
+        def fake_model(request, option):
+            seen.append((copy.deepcopy(request), option))
+            return {"model": option["model"], "output": [
                 {"type": "reasoning", "content": [{"type": "reasoning_text", "text": "I should inspect."}]},
                 {"type": "function_call", "name": "setup", "call_id": "call_glm", "arguments": "{}"}]}
-        server.call_openrouter = fake_model
+        server.call_swap_model = fake_model
         with mock.patch.dict("os.environ", {"OPENROUTER_API_KEY": "test-key"}):
-            self.post("swap-model", {"id": gray["id"], "model": "z-ai/glm-5.3"})
+            self.post("swap-model", {"id": gray["id"], "option": "glm-high"})
             state = self.await_idle()
         swapped = json.loads(state["entries"][1]["current_text"])
         self.assertEqual(len(seen), 1)
-        self.assertEqual(seen[0][1], "z-ai/glm-5.3")
+        self.assertEqual(seen[0][1]["model"], "z-ai/glm-5.3")
         self.assertEqual(len(self.target_requests), 1)
         self.assertEqual(swapped["model"], "z-ai/glm-5.3")
         self.assertEqual(swapped["output"][0]["content"][0]["text"], "I should inspect.")
@@ -272,6 +301,18 @@ class MetriTest(unittest.TestCase):
         swap = next(event for event in events if event["kind"] == "gray_swapped")
         self.assertEqual(swap["removed_ids"], [3])
         self.assertEqual(len(json.loads((server.DATA / swap["archive"] / "session.json").read_text())["entries"]), 3)
+        with urllib.request.urlopen(self.base + f"/api/response-variants?id={gray['id']}") as reply:
+            variants = json.load(reply)["variants"]
+        self.assertEqual(len(variants), 2)
+        self.assertTrue(variants[0]["active"])
+        self.assertEqual(variants[1]["model"], original.get("model", "Unknown model"))
+        self.post("select-response-variant", {"id": gray["id"], "variant": variants[1]["id"]})
+        restored = self.get()
+        self.assertEqual(json.loads(restored["entries"][1]["current_text"])["output"], original["output"])
+        self.assertEqual(len(self.target_requests), 1)
+        with urllib.request.urlopen(self.base + f"/api/response-variants?id={gray['id']}") as reply:
+            variants_after = json.load(reply)["variants"]
+        self.assertIn("z-ai/glm-5.3", [item["model"] for item in variants_after])
 
     def test_model_swap_can_replace_earlier_gray_without_retaining_later_outputs(self):
         first = json.loads(self.get()["entries"][0]["current_text"])
@@ -287,15 +328,14 @@ class MetriTest(unittest.TestCase):
         self.await_idle()
         self.assertEqual(len(self.get()["entries"]), 4)
         seen = []
-        def fake_model(request, model):
-            seen.append(model)
-            return {"model": model, "output": [{"type": "message", "role": "assistant",
+        def fake_model(request, option):
+            seen.append(option["id"])
+            return {"model": option["model"], "output": [{"type": "message", "role": "assistant",
                     "content": [{"type": "output_text", "text": "Changed direction"}]}]}
-        server.call_openrouter = fake_model
-        with mock.patch.dict("os.environ", {"OPENROUTER_API_KEY": "test-key"}):
-            self.post("swap-model", {"id": 2, "model": "z-ai/glm-5.3-flash"})
-            state = self.await_idle()
-        self.assertEqual(seen, ["z-ai/glm-5.3-flash"])
+        server.call_swap_model = fake_model
+        self.post("swap-model", {"id": 2, "option": "sol-high"})
+        state = self.await_idle()
+        self.assertEqual(seen, ["sol-high"])
         self.assertEqual(len(self.target_requests), 2)
         self.assertEqual(len(state["entries"]), 2)
         self.assertIn("Changed direction", state["entries"][1]["current_text"])
