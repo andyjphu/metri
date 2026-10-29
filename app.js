@@ -432,7 +432,7 @@
           state.draft_pending ?
             `<article class="message blue pending"><div class="bubble"><span class="pending-text">Generating draft from API.</span></div></article>` :
             state.auditor_exchange?.at(-1)?.answer === null ?
-              `<div class="auditor-note question"><div class="auditor-note-label">#${entries.length} · Auditor question</div><div>${escapeHtml(state.auditor_exchange.at(-1).question)}</div></div>` :
+              `<div class="auditor-note question"><div class="auditor-note-label">Auditor question</div><div>${escapeHtml(state.auditor_exchange.at(-1).question)}</div></div>` :
               `<div class="auditor-note">${escapeHtml(state.draft_error || "No API draft pending.")}</div>` :
           `<article class="message blue pending"><div class="bubble"><span class="pending-text">Pending a response from your agent.</span><p class="pending-advice">If it stalls, send: “Read review_room/data/session.json and POST a full draft to /api/codex-draft. Do not call the target.”</p></div></article>` : "");
     entries.forEach((entry) => {
