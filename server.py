@@ -351,15 +351,21 @@ def model_catalog():
     if not isinstance(choices, list) or not choices:
         raise ValueError("models.yml needs a nonempty models list.")
     seen = set()
+    slugs = set()
     for option in choices:
         if (not isinstance(option, dict)
                 or not isinstance(option.get("id"), str)
                 or not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,63}", option["id"])
                 or option["id"] in seen
+                or not isinstance(option.get("slug"), str)
+                or not re.fullmatch(r"[a-z0-9][a-z0-9.-]{0,63}", option["slug"])
+                or option["slug"] in slugs
                 or not isinstance(option.get("label"), str)
                 or not option["label"].strip()
                 or not isinstance(option.get("description"), str)
                 or not option["description"].strip()
+                or (option.get("detail") is not None and
+                    (not isinstance(option["detail"], str) or not option["detail"].strip()))
                 or option.get("provider") not in {"openai", "openrouter"}
                 or not isinstance(option.get("model"), str)
                 or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:/~+-]{0,127}", option["model"])
@@ -373,9 +379,43 @@ def model_catalog():
                        for key, value in option.get("access_programs", {}).items())):
             raise ValueError("Invalid or duplicate model in models.yml.")
         seen.add(option["id"])
+        slugs.add(option["slug"])
     if source.get("default") not in seen:
         raise ValueError("models.yml default must name an available model.")
     return source
+
+
+def configured_model_slug(value, catalog):
+    if not isinstance(value, dict):
+        return None
+    matches = [option for option in catalog["models"] if option["model"] == value.get("model")]
+    programs = value.get("access_programs") or {}
+    exact = [option for option in matches if (option.get("access_programs") or {}) == programs]
+    if len(exact) == 1:
+        return exact[0]["slug"]
+    if len(matches) == 1:
+        return matches[0]["slug"]
+    return None
+
+
+def model_slugs(state):
+    """Resolve each visible version from its own JSON, using the YAML catalog."""
+    catalog = model_catalog()
+    result = {}
+    for index, entry in enumerate(state["entries"]):
+        try:
+            value = parsed(entry)
+        except (ValueError, TypeError):
+            continue
+        slug = configured_model_slug(value, catalog)
+        if not slug and entry["side"] == "gray" and index:
+            try:
+                slug = configured_model_slug(parsed(state["entries"][index - 1]), catalog)
+            except (ValueError, TypeError):
+                pass
+        if slug:
+            result[str(entry["id"])] = slug
+    return result
 
 
 def swap_models():
@@ -937,6 +977,29 @@ def response_variants(state, trace_id, target):
     return variants
 
 
+def version_numbers(state, trace_id):
+    """Report active version labels without changing the saved conversation."""
+    prefix = f"swap-{trace_id}-"
+    archived_ids = set()
+    for folder in (DATA / "archive").glob(f"{prefix}*"):
+        number = folder.name[len(prefix):].split("-", 1)[0]
+        if number.isdigit():
+            archived_ids.add(int(number))
+    result = {}
+    for entry in state["entries"]:
+        if entry.get("versions"):
+            result[str(entry["id"])] = next(
+                (index for index, item in enumerate(entry["versions"], 1)
+                 if item["id"] == entry.get("active_version")), 1)
+        elif entry["side"] == "gray" and entry["id"] in archived_ids:
+            result[str(entry["id"])] = next(
+                (item["number"] for item in response_variants(state, trace_id, entry)
+                 if item["active"]), 1)
+        else:
+            result[str(entry["id"])] = 1
+    return result
+
+
 def ensure_versions(state, trace_id, target):
     if target.get("versions"):
         return
@@ -1114,7 +1177,9 @@ class Handler(BaseHTTPRequestHandler):
             with LOCK:
                 state = load_state()
                 saved_at = datetime.fromtimestamp(STATE_FILE.stat().st_mtime, timezone.utc).isoformat()
-                self.send(200, {**state, "saved_at": saved_at})
+                self.send(200, {**state, "saved_at": saved_at,
+                                "version_numbers": version_numbers(state, load_traces()["active"]),
+                                "model_slugs": model_slugs(state)})
             return
         if path == "/api/events":
             records = [json.loads(line) for line in EVENTS_FILE.read_text().splitlines()] if EVENTS_FILE.exists() else []

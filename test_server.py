@@ -74,6 +74,7 @@ class MetriTest(unittest.TestCase):
 
     def test_blue_edit_requires_confirmation_and_creates_selectable_version(self):
         original = self.get()["entries"][0]["current_text"]
+        self.assertEqual(self.get()["version_numbers"]["1"], 1)
         changed = json.loads(original)
         changed["input"][0]["content"] = "Edited request"
         raw = json.dumps(changed)
@@ -88,12 +89,14 @@ class MetriTest(unittest.TestCase):
             error.exception.close()
         self.post("confirm-edit", {"id": 1, "text": raw})
         self.assertEqual(self.get()["entries"][0]["current_text"], raw)
+        self.assertEqual(self.get()["version_numbers"]["1"], 2)
         versions = self.variants(1)
         self.assertEqual([item["number"] for item in versions], [1, 2])
         self.assertEqual(versions[1]["kind"], "manual")
         self.assertEqual(versions[1]["model"], "test-model")
         self.post("select-message-variant", {"id": 1, "variant": versions[0]["id"]})
         self.assertEqual(self.get()["entries"][0]["current_text"], original)
+        self.assertEqual(self.get()["version_numbers"]["1"], 1)
         self.assertEqual([item["number"] for item in self.variants(1)], [1, 2])
 
     def test_gray_edit_can_be_discarded_or_confirmed_as_version(self):
@@ -112,10 +115,12 @@ class MetriTest(unittest.TestCase):
         self.post("start-edit", {"id": 2})
         self.post("confirm-edit", {"id": 2, "text": raw})
         self.assertEqual(self.get()["entries"][1]["current_text"], raw)
+        self.assertEqual(self.get()["version_numbers"]["2"], 2)
         versions = self.variants(2)
         self.assertEqual([item["kind"] for item in versions], ["generated", "manual"])
         self.post("select-message-variant", {"id": 2, "variant": versions[0]["id"]})
         self.assertEqual(self.get()["entries"][1]["current_text"], original)
+        self.assertEqual(self.get()["version_numbers"]["2"], 1)
         self.assertEqual([item["number"] for item in self.variants(2)], [1, 2])
 
     def test_refreshed_blue_drafts_keep_generation_numbers(self):
@@ -134,10 +139,12 @@ class MetriTest(unittest.TestCase):
         draft_two["input"].append({"role": "user", "content": "Second draft"})
         self.post("codex-draft", {"request": draft_two})
         self.assertEqual([item["number"] for item in self.variants(3)], [1, 2])
+        self.assertEqual(self.get()["version_numbers"]["3"], 2)
         self.assertEqual(self.get()["entries"][-1]["current_text"], server.dump(draft_two))
         earlier = self.variants(3)[0]["id"]
         self.post("select-message-variant", {"id": 3, "variant": earlier})
         self.assertEqual(self.get()["entries"][-1]["current_text"], server.dump(draft_one))
+        self.assertEqual(self.get()["version_numbers"]["3"], 1)
         self.assertEqual([item["number"] for item in self.variants(3)], [1, 2])
 
     def test_rail_points_are_trace_specific_and_validated(self):
@@ -190,7 +197,12 @@ class MetriTest(unittest.TestCase):
         with urllib.request.urlopen(self.base + "/api/models") as reply:
             catalog = json.load(reply)
         self.assertEqual(catalog["default"], "sol-daybreak")
-        self.assertEqual(catalog["models"][0]["description"], "daybreak_blue: enabled")
+        self.assertEqual(catalog["models"][0]["description"], "OpenAI · High")
+        self.assertEqual(catalog["models"][0]["detail"], "daybreak_blue: enabled")
+        self.assertEqual(catalog["models"][0]["slug"], "gpt-6-sol-daybreak")
+        daybreak_request = server.new_trace_request()
+        self.assertEqual(daybreak_request["reasoning"], {"effort": "high"})
+        self.assertEqual(daybreak_request["access_programs"], {"cyber": "daybreak_blue"})
         changed = self.post("default-model", {"id": "glm-high"})
         self.assertEqual(changed["default"], "glm-high")
         self.assertEqual(server.model_catalog()["default"], "glm-high")
@@ -204,6 +216,20 @@ class MetriTest(unittest.TestCase):
         self.assertEqual(error.exception.code, 400)
         error.exception.close()
         self.assertEqual(server.model_catalog()["default"], "glm-high")
+
+    def test_message_slugs_follow_the_selected_message_json(self):
+        request = {"model": "gpt-6-sol", "access_programs": {"cyber": "daybreak_blue"}}
+        state = {"entries": [
+            {"id": 1, "side": "blue", "current_text": json.dumps(request)},
+            {"id": 2, "side": "gray", "current_text": json.dumps({"model": "gpt-6-sol", "access_programs": request["access_programs"]})},
+        ]}
+        self.assertEqual(server.model_slugs(state), {"1": "gpt-6-sol-daybreak", "2": "gpt-6-sol-daybreak"})
+        state["entries"][1]["current_text"] = json.dumps({"model": "z-ai/glm-5.3"})
+        self.assertEqual(server.model_slugs(state)["2"], "glm-5.3-high")
+        state["entries"][1]["current_text"] = json.dumps({"model": "gpt-6-sol"})
+        self.assertEqual(server.model_slugs(state)["2"], "gpt-6-sol-high")
+        state["entries"][1]["current_text"] = json.dumps({"output": []})
+        self.assertEqual(server.model_slugs(state)["2"], "gpt-6-sol-daybreak")
 
     def test_configured_openrouter_default_routes_target_requests(self):
         seen = []
@@ -414,12 +440,14 @@ class MetriTest(unittest.TestCase):
             variants = json.load(reply)["variants"]
         self.assertEqual(len(variants), 2)
         self.assertEqual([item["number"] for item in variants], [1, 2])
+        self.assertEqual(self.get()["version_numbers"][str(gray["id"])], 2)
         self.assertFalse(variants[0]["active"])
         self.assertTrue(variants[1]["active"])
         self.assertEqual(variants[0]["model"], original.get("model", "Unknown model"))
         self.post("select-response-variant", {"id": gray["id"], "variant": variants[0]["id"]})
         restored = self.get()
         self.assertEqual(json.loads(restored["entries"][1]["current_text"])["output"], original["output"])
+        self.assertEqual(restored["version_numbers"][str(gray["id"])], 1)
         self.assertEqual(len(self.target_requests), 1)
         with urllib.request.urlopen(self.base + f"/api/response-variants?id={gray['id']}") as reply:
             variants_after = json.load(reply)["variants"]
