@@ -55,7 +55,7 @@ button { cursor: pointer; }
 .rail-point { position: absolute; left: 0; display: block; width: 14px; height: 14px; padding: 0; transform: translateY(-50%); border: 0; border-radius: 50%; background: transparent; }
 .rail-point::before { content: "•"; position: absolute; top: 2px; left: 4px; height: 9px; color: #616161; background: #fff; font-size: 9px; line-height: 9px; }
 .rail-point:hover::before, .rail-point:focus-visible::before { color: #1c1c1e; }
-.rail-label { position: absolute; top: 50%; left: 15px; width: max-content; padding: 3px 6px; transform: translateY(-50%); border-radius: 4px; background: #fff; color: #77777c; font-size: 11px; line-height: 1.35; white-space: nowrap; text-align: left; box-shadow: 0 1px 5px #00000012; opacity: 0; visibility: hidden; pointer-events: none; transition: opacity .25s ease, visibility .25s ease; }
+.rail-label { position: absolute; top: 50%; left: 15px; width: max-content; padding: 3px 6px; transform: translateY(-50%); border-radius: 4px; background: #fff; color: #77777c; font-size: 11px; line-height: 1.35; white-space: nowrap; text-align: left; box-shadow: 0 1px 5px #00000012; opacity: 0; visibility: hidden; cursor: pointer; transition: opacity .25s ease, visibility .25s ease; }
 .scroll-rail:hover .rail-label, .scroll-rail:focus-within .rail-label { opacity: 1; visibility: visible; }
 .rail-point:hover .rail-label, .rail-point:focus-visible .rail-label { color: var(--ink); }
 .message { position: relative; width: min(96%, 1440px); margin: 0 0 32px; scroll-margin: 22px; }

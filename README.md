@@ -18,7 +18,7 @@ On any gray bubble, ⇄ opens a model picker and replaces that response through 
 
 The Collapse slider folds every bubble to one line. Each bubble's caret stays visible; its other controls appear as you approach the bubble. The caret folds or expands just that bubble. Folding changes only the view, not the saved conversation. The browser remembers the collapse choices for each trace.
 
-The left rail maps the full conversation. Subtle purple marks agent text responses and orange marks agent tool calls. The dark segment shows the visible part of the conversation. Click the rail to scroll, or click a dot to jump to a named moment. An agent can add dots for each trace in `data/rails/<trace-id>.yml`, using [this example](examples/rail.yml). Hover over the rail to see all bookmark labels. The rail recalculates from the bubbles' actual heights as they expand or collapse.
+The left rail maps the full conversation. Subtle purple marks agent text responses and orange marks agent tool calls. The dark segment shows the visible part of the conversation. Click the rail to scroll, or click a dot or its label to jump to a named moment. An agent can add dots for each trace in `data/rails/<trace-id>.yml`, using [this example](examples/rail.yml). Hover over the rail to see all bookmark labels. The rail recalculates from the bubbles' actual heights as they expand or collapse.
 
 The Auto slider starts or pauses an authorized unattended run. Turning it on sends a waiting blue draft after local edits are saved; later gray responses wake the auditor for the next turn. Turning it off leaves the current model call to finish and stops future automatic sends. The packaged [Metri skill](skills/metri/SKILL.md) defines the auditor's stop rules.
 
