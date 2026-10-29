@@ -16,7 +16,7 @@ Blue bubbles contain the full request JSON. Gray bubbles contain the full agent 
 
 The Collapse slider folds every bubble to one line. The caret beside a bubble's edit control folds or expands just that bubble. Folding changes only the view, not the saved conversation. The browser remembers the collapse choices for each trace.
 
-The Auto slider starts or pauses an authorized unattended run. Turning it on sends a waiting blue draft after local edits are saved; later gray responses wake the auditor for the next turn. Turning it off leaves the current model call to finish and stops future automatic sends. The packaged [Better Petri skill](skills/better-petri/SKILL.md) defines the auditor's stop rules.
+The AutoApprove slider starts or pauses an authorized unattended run. Turning it on sends a waiting blue draft after local edits are saved; later gray responses wake the auditor for the next turn. Turning it off leaves the current model call to finish and stops future automatic sends. The packaged [Better Petri skill](skills/better-petri/SKILL.md) defines the auditor's stop rules.
 
 The save indicator shows the time since the local session was saved, rounded to five-second steps for the first minute. It shows pending edits or failures when applicable. If a save is pending when you tap ✓, the page warns and finishes saving before sending. The blue editor's current JSON is included in the approval request itself.
 
