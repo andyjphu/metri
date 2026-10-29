@@ -1,0 +1,9 @@
+{
+  "author": "seed",
+  "title": "ue_zeroshot baseline (chat-0115, seed 42)",
+  "body": "Cached upstream result for ue_zeroshot: weak_acc=0.543943, strong_acc=0.730008, transfer_acc=0.520206, pgr=-0.038000.",
+  "evidence_paths": [
+    "cache/ue_zeroshot_seed_42.json"
+  ],
+  "provenance": "Upstream automated-w2s-research cache; local E110 reconstruction, not verified as the paper E5 seed."
+}

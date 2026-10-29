@@ -1,0 +1,9 @@
+{
+  "author": "seed",
+  "title": "critic baseline (chat-0115, seed 42)",
+  "body": "Cached upstream result for critic: weak_acc=0.543943, strong_acc=0.730008, transfer_acc=0.504355, pgr=-0.115385.",
+  "evidence_paths": [
+    "cache/critic_seed_42.json"
+  ],
+  "provenance": "Upstream automated-w2s-research cache; local E110 reconstruction, not verified as the paper E5 seed."
+}

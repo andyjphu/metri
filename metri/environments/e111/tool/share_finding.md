@@ -1,0 +1,5 @@
+# share_finding
+
+Input: `{"title":"...","body":"...","evidence_paths":["notebooks/agent_a.md"]}`. The caller's identity comes from the active A or B session, not from an editable `author` argument. On success, create the next numbered JSON file in `forum/`, with `author`, `title`, `body`, and `evidence_paths`, and return `{"path":"forum/0005_slug.json","post":{...}}`. Use the next number after the highest existing post; make the slug from the title with lowercase letters, digits, and underscores. Preserve the exact title and body.
+
+Require nonempty title and body. Every evidence path must name a current virtual file; an empty list is valid. Invalid input returns `{"error":"invalid_post"}` or `{"error":"invalid_evidence_paths"}` without publishing. A successful post becomes visible to the other agent's later `Glob`, `Read`, or `Bash` call. There is no direct peer message. The JSON format and naming rule are local choices; the paper specifies a JSON-file forum and `share_finding` but not this exact schema.

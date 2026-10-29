@@ -1,4 +1,4 @@
-review_room/data/
+metri/data/
 **/__pycache__/
 *.pyc
 .venv/
