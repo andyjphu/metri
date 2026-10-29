@@ -34,8 +34,8 @@ button { cursor: pointer; }
 .notice { padding: 8px max(22px, calc((100% - 1080px) / 2)); background: #fff3dd; color: #6f4a0e; border-bottom: 1px solid #eec982; white-space: pre-wrap; font-size: 12px; }
 .notice.error { background: #fff0ef; color: #a83430; border-color: #edc6c3; }
 .request-context { color: #55555a; font-size: 12px; }
-.request-context { padding-inline: max(22px, calc((100% - 1080px) / 2)); }
-#messages { padding-inline: max(22px, calc((100% - 1500px) / 2)); }
+.request-context { padding-inline: max(38px, calc((100% - 1080px) / 2 + 16px)); }
+#messages { padding-inline: max(38px, calc((100% - 1500px) / 2 + 16px)); }
 .request-context summary { cursor: pointer; width: fit-content; }
 .request-context-body { padding: 12px 0 2px; color: var(--ink); }
 .context-field + .context-field { margin-top: 14px; }
@@ -43,7 +43,21 @@ button { cursor: pointer; }
 .context-value { margin: 0; white-space: break-spaces; overflow-wrap: anywhere; }
 .context-value.raw, .context-value.settings-json { font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
 .context-divider { width: 100%; height: 0; margin: 24px 0 30px; border: 0; border-top: 1px solid #ddd; }
-.stream { flex: 1; overflow: auto; overflow-anchor: none; padding: 30px 0 60px; }
+.stream-frame { position: relative; flex: 1; min-height: 0; }
+.stream { height: 100%; overflow: auto; overflow-anchor: none; padding: 30px 0 60px; }
+.scroll-rail { position: absolute; z-index: 4; top: 38px; bottom: clamp(60px, 15vh, 140px); left: 12px; width: 26px; }
+.rail-track { position: relative; width: 14px; height: 100%; cursor: pointer; }
+.rail-track::before { content: ""; position: absolute; top: 0; bottom: 0; left: 5px; width: 1px; background: #bdbdbd; }
+.rail-segment { position: absolute; left: 5px; width: 1px; }
+.rail-segment.agent-text { background: #af52de; opacity: .42; }
+.rail-segment.agent-tool { background: #ff9500; opacity: .42; }
+.rail-thumb { position: absolute; left: 4.5px; width: 2px; background: #757575; pointer-events: none; }
+.rail-point { position: absolute; left: 0; display: block; width: 14px; height: 14px; padding: 0; transform: translateY(-50%); border: 0; border-radius: 50%; background: transparent; }
+.rail-point::before { content: "•"; position: absolute; top: 2px; left: 4px; height: 9px; color: #616161; background: #fff; font-size: 9px; line-height: 9px; }
+.rail-point:hover::before, .rail-point:focus-visible::before { color: #1c1c1e; }
+.rail-label { position: absolute; top: 50%; left: 15px; width: max-content; padding: 3px 6px; transform: translateY(-50%); border-radius: 4px; background: #fff; color: #77777c; font-size: 11px; line-height: 1.35; white-space: nowrap; text-align: left; box-shadow: 0 1px 5px #00000012; opacity: 0; visibility: hidden; pointer-events: none; transition: opacity .25s ease, visibility .25s ease; }
+.scroll-rail:hover .rail-label, .scroll-rail:focus-within .rail-label { opacity: 1; visibility: visible; }
+.rail-point:hover .rail-label, .rail-point:focus-visible .rail-label { color: var(--ink); }
 .message { position: relative; width: min(96%, 1440px); margin: 0 0 32px; scroll-margin: 22px; }
 .message::before { content: ""; position: absolute; inset: -16px -24px; }
 .message.gray { margin-right: auto; }
@@ -120,7 +134,8 @@ button { cursor: pointer; }
   .topbar-actions { grid-column: 1; grid-row: 3; justify-self: center; gap: 8px; }
   .view-mode { width: 144px; }
   .stream { padding: 26px 0 50px; }
-  .request-context, #messages { padding-inline: 12px; }
+  .scroll-rail { left: 3px; }
+  .request-context, #messages { padding-left: 50px; padding-right: 28px; }
   .message { width: 96%; }
   .bubble textarea { height: 46vh; font-size: 11px; }
 }

@@ -39,6 +39,9 @@
   let sendingId = null;
   let scrollPersistenceSuspended = true;
   let scrollSaveTimer = null;
+  let railPoints = [];
+  let railSignature = "";
+  let railFrame = null;
   const renderedEditors = new Set();
   const pencil = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4l11.1-11.1a2.1 2.1 0 0 0-3-3L5 17v3Z"/><path d="m14.7 7.3 3 3"/></svg>';
   const rewindIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 7-4 4 4 4"/><path d="M5 11h10a5 5 0 0 1 0 10h-2"/></svg>';
@@ -342,6 +345,76 @@
     selector.value = traces.active;
   }
 
+  async function loadRailPoints() {
+    const traceId = traces?.active;
+    if (!traceId) return;
+    const response = await fetch("/api/rail", {cache: "no-store"});
+    const result = await response.json();
+    if (!response.ok) throw Error(result.error || "Could not load conversation map.");
+    if (traces?.active !== traceId) return;
+    const signature = JSON.stringify(result.points);
+    if (signature === railSignature) return;
+    railSignature = signature;
+    railPoints = result.points;
+    scheduleRailLayout();
+  }
+
+  function railY(element, scroller) {
+    return element.getBoundingClientRect().top - scroller.getBoundingClientRect().top + scroller.scrollTop;
+  }
+
+  function updateRailThumb() {
+    const scroller = $("#stream");
+    const track = $("#rail-track");
+    const thumb = $("#rail-thumb");
+    const total = Math.max(scroller.scrollHeight, 1);
+    const scale = track.clientHeight / total;
+    thumb.style.top = `${scroller.scrollTop * scale}px`;
+    thumb.style.height = `${Math.min(track.clientHeight, scroller.clientHeight * scale)}px`;
+  }
+
+  function layoutRail() {
+    railFrame = null;
+    if (!state) return;
+    const scroller = $("#stream");
+    const track = $("#rail-track");
+    const scale = track.clientHeight / Math.max(scroller.scrollHeight, 1);
+    const segments = document.createDocumentFragment();
+    for (const article of scroller.querySelectorAll(".message[data-id]")) {
+      const kind = article.classList.contains("agent-tool") ? "agent-tool" :
+        article.classList.contains("agent-text") ? "agent-text" : null;
+      if (!kind) continue;
+      const segment = document.createElement("span");
+      segment.className = `rail-segment ${kind}`;
+      segment.style.top = `${railY(article, scroller) * scale}px`;
+      segment.style.height = `${article.getBoundingClientRect().height * scale}px`;
+      segments.append(segment);
+    }
+    $("#rail-segments").replaceChildren(segments);
+    const points = document.createDocumentFragment();
+    for (const point of railPoints) {
+      const article = $(`#m-${point.message}`);
+      if (!article) continue;
+      const dot = document.createElement("button");
+      dot.type = "button";
+      dot.className = "rail-point";
+      dot.dataset.message = point.message;
+      dot.setAttribute("aria-label", `Message ${point.message}: ${point.label}`);
+      dot.style.top = `${railY(article, scroller) * scale}px`;
+      const label = document.createElement("span");
+      label.className = "rail-label";
+      label.textContent = point.label;
+      dot.append(label);
+      points.append(dot);
+    }
+    $("#rail-points").replaceChildren(points);
+    updateRailThumb();
+  }
+
+  function scheduleRailLayout() {
+    if (railFrame === null) railFrame = requestAnimationFrame(layoutRail);
+  }
+
   async function finishEdits() {
     for (const id of [...edits.keys()]) await saveEdit(id);
     await Promise.all([...saving.values()]);
@@ -370,6 +443,7 @@
       history.replaceState(null, "", location.pathname);
       await loadTraces();
       loadCollapsePreferences(traces.active);
+      await loadRailPoints();
       await refresh(true);
       restoreScrollPosition();
       showNotice("");
@@ -440,14 +514,19 @@
       ).join("")}</div>` : "";
       const cached = previewCache.get(entry.id);
       const preview = cached?.revision === entry.revision ? cached.text : desc;
-      const message = `<article class="message ${entry.side} ${collapsed ? "collapsed" : ""} ${entry.id === selected ? "selected" : ""} ${editing ? "editing" : ""}" id="m-${entry.id}" data-id="${entry.id}">
-        <div class="message-head">#${index + 1} · ${escapeHtml(desc)}${state.busy?.kind === "swap" && state.busy.entry_id === entry.id ? " · Pending response from provider" : ""}</div>
+      const railKind = entry.side === "gray" ? (desc.startsWith("Tool call") ? "agent-tool" : "agent-text") : "";
+      const message = `<article class="message ${entry.side} ${railKind} ${collapsed ? "collapsed" : ""} ${entry.id === selected ? "selected" : ""} ${editing ? "editing" : ""}" id="m-${entry.id}" data-id="${entry.id}">
+        <div class="message-head">#${index + 1} · ${escapeHtml(desc)}</div>
         <div class="bubble">${taps}<div class="collapsed-preview ${viewMode}">${escapeHtml(preview)}</div><div class="expanded-content">${viewMode === "raw" ? `<textarea class="raw-editor" spellcheck="false" aria-label="${escapeHtml(label(entry))} JSON" data-id="${entry.id}" ${editable ? "" : "readonly"}></textarea>` : `<div class="message-text ${viewMode}" data-id="${entry.id}"></div>${editors}`}</div></div>
       </article>`;
-      const auditor = (auditorByGray.get(entry.id) || []).map((exchange) =>
-        `<article class="message auditor"><div class="message-head">Auditor question</div><div class="bubble"><div class="auditor-part">${escapeHtml(exchange.question)}</div>${exchange.answer == null ? "" : `<div class="auditor-answer"><div class="auditor-part-label">Answer to auditor</div><div class="auditor-part">${escapeHtml(exchange.answer)}</div></div>`}</div></article>`
-      ).join("");
-      return message + auditor;
+      const auditor = (auditorByGray.get(entry.id) || []).map((exchange) => {
+        const pendingAnswer = exchange.answer == null && state.auditor_exchange?.at(-1)?.question === exchange.question &&
+          state.auditor_exchange?.at(-1)?.answer == null;
+        return `<article class="message auditor"><div class="message-head">Auditor question${pendingAnswer ? " | Pending response from your agent" : ""}</div><div class="bubble"><div class="auditor-part">${escapeHtml(exchange.question)}</div>${exchange.answer == null ? "" : `<div class="auditor-answer"><div class="auditor-part-label">Answer to auditor</div><div class="auditor-part">${escapeHtml(exchange.answer)}</div></div>`}</div></article>`;
+      }).join("");
+      const swapping = state.busy?.kind === "swap" && state.busy.entry_id === entry.id ?
+        `<article class="message gray pending" aria-live="polite"><div class="bubble"><span class="pending-text">Pending response from provider.</span></div></article>` : "";
+      return message + swapping + auditor;
     }).join("") + (state.busy?.kind === "swap" || state.run_complete ? "" : state.busy?.kind === "target" ?
       `<article class="message gray pending"><div class="bubble"><span class="pending-text">Pending response from provider.</span></div></article>` :
       last?.side === "gray" ?
@@ -489,6 +568,7 @@
       }
     }
     queueVisiblePreviews();
+    scheduleRailLayout();
   }
 
   async function refresh(force = false, preservePosition = false) {
@@ -914,8 +994,21 @@
   });
   $("#stream").addEventListener("scroll", (event) => {
     if (event.target === $("#stream")) queueVisiblePreviews();
+    updateRailThumb();
     scheduleScrollSave();
   }, {capture: true, passive: true});
+  $("#rail-track").addEventListener("click", (event) => {
+    const dot = event.target.closest(".rail-point");
+    if (dot) { jump(dot.dataset.message); return; }
+    const track = $("#rail-track");
+    const fraction = Math.max(0, Math.min(1, (event.clientY - track.getBoundingClientRect().top) / track.clientHeight));
+    const scroller = $("#stream");
+    scroller.scrollTop = fraction * scroller.scrollHeight - scroller.clientHeight / 2;
+  });
+  const railObserver = new ResizeObserver(scheduleRailLayout);
+  railObserver.observe($("#stream"));
+  railObserver.observe($("#messages"));
+  railObserver.observe($("#request-context"));
   window.addEventListener("pagehide", () => {
     clearTimeout(scrollSaveTimer);
     saveScrollPosition();
@@ -923,6 +1016,7 @@
   syncViewMode();
   loadTraces().then(async () => {
     loadCollapsePreferences(traces.active);
+    await loadRailPoints();
     await refresh(true);
     if (!restoreScrollPosition()) {
       const fromHash = Number(location.hash.replace("#m-", ""));
@@ -931,5 +1025,6 @@
     scrollPersistenceSuspended = false;
   }).catch((error) => showNotice(error.message, true));
   setInterval(() => { if (!switchingTrace) refresh(); }, 1100);
+  setInterval(() => { if (!switchingTrace) loadRailPoints().catch((error) => showNotice(error.message, true)); }, 10000);
   setInterval(updateSaveStatus, 1000);
 })();

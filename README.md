@@ -1,6 +1,6 @@
 # Metri
 
-Run `python3 -m metri.server --port 8765` from the repository root, then open <http://127.0.0.1:8765>.
+Install dependencies with `python3 -m pip install -r metri/requirements.txt`. Run `python3 -m metri.server --port 8765` from the repository root, then open <http://127.0.0.1:8765>.
 
 The name in the middle of the bar selects the active trace. The pencil beside it renames that trace. The current E110 run and archived V8 rerun have separate names; switching saves the run you leave and restores the one you select. Model, access program, and save age sit together at the left of the bar.
 
@@ -17,6 +17,8 @@ Blue bubbles contain the full request JSON. Gray bubbles contain the full agent 
 On any gray bubble, ⇄ opens a model picker and replaces that response through OpenRouter. Set `OPENROUTER_API_KEY` before starting the server and turn Auto off first. Later bubbles are removed from the active conversation and saved with the original response in a local archive. A new blue draft is then queued. Raw shows the full returned JSON; Rendered shows reasoning when the provider includes it.
 
 The Collapse slider folds every bubble to one line. Each bubble's caret stays visible; its other controls appear as you approach the bubble. The caret folds or expands just that bubble. Folding changes only the view, not the saved conversation. The browser remembers the collapse choices for each trace.
+
+The left rail maps the full conversation. Subtle purple marks agent text responses and orange marks agent tool calls. The dark segment shows the visible part of the conversation. Click the rail to scroll, or click a dot to jump to a named moment. An agent can add dots for each trace in `data/rails/<trace-id>.yml`, using [this example](examples/rail.yml). Hover over the rail to see all bookmark labels. The rail recalculates from the bubbles' actual heights as they expand or collapse.
 
 The Auto slider starts or pauses an authorized unattended run. Turning it on sends a waiting blue draft after local edits are saved; later gray responses wake the auditor for the next turn. Turning it off leaves the current model call to finish and stops future automatic sends. The packaged [Metri skill](skills/metri/SKILL.md) defines the auditor's stop rules.
 

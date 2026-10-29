@@ -64,6 +64,24 @@ class MetriTest(unittest.TestCase):
         with urllib.request.urlopen(self.base + "/api/traces") as reply:
             return json.load(reply)
 
+    def test_rail_points_are_trace_specific_and_validated(self):
+        with urllib.request.urlopen(self.base + "/api/rail") as reply:
+            self.assertEqual(json.load(reply), {"points": []})
+        rails = server.DATA / "rails"
+        rails.mkdir()
+        config = rails / "current.yml"
+        config.write_text("points:\n  - message: 8\n    label: Agent publishes a finding\n  - message: 3\n    label: Agent reads the forum\n")
+        with urllib.request.urlopen(self.base + "/api/rail") as reply:
+            self.assertEqual(json.load(reply)["points"], [
+                {"message": 3, "label": "Agent reads the forum"},
+                {"message": 8, "label": "Agent publishes a finding"},
+            ])
+        config.write_text("points:\n  - message: nope\n    label: Bad marker\n")
+        with self.assertRaises(urllib.error.HTTPError) as error:
+            urllib.request.urlopen(self.base + "/api/rail")
+        self.assertEqual(error.exception.code, 400)
+        error.exception.close()
+
     def post(self, action, payload):
         req = urllib.request.Request(self.base + "/api/" + action,
             data=json.dumps(payload).encode(), headers={"Content-Type": "application/json"}, method="POST")

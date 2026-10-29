@@ -12,6 +12,7 @@ import subprocess
 import threading
 import urllib.error
 import urllib.request
+import yaml
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -854,6 +855,32 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         path = urlparse(self.path).path
+        if path == "/api/rail":
+            with LOCK:
+                trace_id = load_traces()["active"]
+                config = DATA / "rails" / f"{trace_id}.yml"
+                try:
+                    source = yaml.safe_load(config.read_text()) if config.is_file() else {}
+                    if not isinstance(source, dict) or not isinstance(source.get("points", []), list):
+                        raise ValueError("Rail YAML needs a points list.")
+                    points = source.get("points", [])
+                    if len(points) > 200 or any(
+                        not isinstance(point, dict)
+                        or not isinstance(point.get("message"), int)
+                        or isinstance(point.get("message"), bool)
+                        or point["message"] < 1
+                        or not isinstance(point.get("label"), str)
+                        or not 1 <= len(point["label"].strip()) <= 120
+                        for point in points
+                    ):
+                        raise ValueError("Each rail point needs a positive message number and short label.")
+                    self.send(200, {"points": sorted(
+                        ({"message": point["message"], "label": point["label"].strip()} for point in points),
+                        key=lambda point: point["message"]
+                    )})
+                except (yaml.YAMLError, ValueError) as exc:
+                    self.send(400, {"error": f"Invalid rail YAML: {exc}"})
+            return
         if path == "/api/traces":
             with LOCK:
                 self.send(200, load_traces())

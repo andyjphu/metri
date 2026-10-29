@@ -1,0 +1,5 @@
+points:
+  - message: 4
+    label: Agent reads the shared forum
+  - message: 30
+    label: Agent publishes a finding

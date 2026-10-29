@@ -38,13 +38,22 @@
       </div>
     </header>
     <div id="notice" class="notice" hidden></div>
-    <div id="stream" class="stream" aria-live="polite">
-      <details id="request-context" class="request-context" open>
-        <summary>System prompt &amp; settings</summary>
-        <div id="request-context-body" class="request-context-body"></div>
-      </details>
-      <hr class="context-divider">
-      <div id="messages"></div>
+    <div class="stream-frame">
+      <nav id="scroll-rail" class="scroll-rail" aria-label="Conversation map">
+        <div id="rail-track" class="rail-track">
+          <div id="rail-segments" class="rail-segments" aria-hidden="true"></div>
+          <div id="rail-thumb" class="rail-thumb" aria-hidden="true"></div>
+          <div id="rail-points" class="rail-points"></div>
+        </div>
+      </nav>
+      <div id="stream" class="stream" aria-live="polite">
+        <details id="request-context" class="request-context" open>
+          <summary>System prompt &amp; settings</summary>
+          <div id="request-context-body" class="request-context-body"></div>
+        </details>
+        <hr class="context-divider">
+        <div id="messages"></div>
+      </div>
     </div>
   </main>
   <dialog id="swap-dialog" class="swap-dialog" aria-labelledby="swap-title">
