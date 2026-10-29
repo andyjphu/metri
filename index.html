@@ -19,21 +19,18 @@
         <button id="trace-rename" type="button" title="Rename trace" aria-label="Rename trace"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4l11.1-11.1a2.1 2.1 0 0 0-3-3L5 17v3Z"/><path d="m14.7 7.3 3 3"/></svg></button>
       </div>
       <div class="topbar-actions">
-        <label class="topbar-switch" title="On: API generates blue drafts. Off: the bound Codex session drafts them.">
-          <input id="api-mode" type="checkbox" role="switch" aria-label="API drafts">
-          <span>API</span>
-        </label>
-        <label class="topbar-switch">
-          <input id="auto-mode" type="checkbox" role="switch" aria-label="Auto">
-          <span>Auto</span>
-        </label>
-        <label class="topbar-switch">
-          <input id="collapse-all" type="checkbox" aria-label="Collapse all bubbles">
-          <span>Collapse</span>
-        </label>
         <div id="view-mode" class="view-mode" role="group" aria-label="Message view" data-mode="raw">
           <button type="button" data-view="raw" aria-pressed="true">Raw</button>
           <button type="button" data-view="rendered" aria-pressed="false">Rendered</button>
+        </div>
+        <div class="settings-wrap">
+          <button id="settings-button" class="settings-button" type="button" aria-label="Settings" aria-controls="settings-panel" aria-expanded="false" title="Settings"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10.2 2.8h3.6l.5 2.2c.5.2 1 .4 1.5.6l1.9-1.2 2.6 2.6-1.2 1.9c.3.5.5 1 .6 1.5l2.2.5v3.6l-2.2.5c-.2.5-.4 1-.6 1.5l1.2 1.9-2.6 2.6-1.9-1.2c-.5.3-1 .5-1.5.6l-.5 2.2h-3.6l-.5-2.2c-.5-.2-1-.4-1.5-.6l-1.9 1.2-2.6-2.6 1.2-1.9c-.3-.5-.5-1-.6-1.5l-2.2-.5v-3.6l2.2-.5c.2-.5.4-1 .6-1.5L3.7 7l2.6-2.6 1.9 1.2c.5-.3 1-.5 1.5-.6l.5-2.2Z"/><circle cx="12" cy="12" r="3"/></svg></button>
+          <div id="settings-panel" class="settings-panel" hidden>
+            <div class="settings-row"><span>Draft with</span><div id="draft-source-control" class="view-mode source-mode" role="group" aria-label="Draft with" data-mode="codex"><button type="button" data-source="codex" aria-pressed="true">Agent</button><button type="button" data-source="api" aria-pressed="false">API</button></div></div>
+            <label class="settings-row topbar-switch"><span>Auto-approve</span><input id="auto-mode" type="checkbox" role="switch" aria-label="Auto-approve"></label>
+            <label class="settings-row topbar-switch"><span>Auto-generate</span><input id="auto-generate" type="checkbox" role="switch" aria-label="Auto-generate blue drafts"></label>
+            <label class="settings-row topbar-switch settings-divider"><span>Collapse all</span><input id="collapse-all" type="checkbox" role="switch" aria-label="Collapse all bubbles"></label>
+          </div>
         </div>
       </div>
     </header>

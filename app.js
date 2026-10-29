@@ -36,6 +36,7 @@
   let switchingTrace = false;
   let changingAuto = false;
   let changingDraftSource = false;
+  let changingAutoGenerate = false;
   let sendingId = null;
   let scrollPersistenceSuspended = true;
   let scrollSaveTimer = null;
@@ -291,7 +292,15 @@
   }
 
   function updateDraftSource() {
-    if (!changingDraftSource) $("#api-mode").checked = state?.draft_source === "api";
+    if (changingDraftSource) return;
+    const source = state?.draft_source === "api" ? "api" : "codex";
+    $("#draft-source-control").dataset.mode = source;
+    $("#draft-source-control").querySelectorAll("[data-source]").forEach((button) =>
+      button.setAttribute("aria-pressed", String(button.dataset.source === source)));
+  }
+
+  function updateAutoGenerate() {
+    if (!changingAutoGenerate) $("#auto-generate").checked = state?.auto_generate !== false;
   }
 
   function renderRequestContext() {
@@ -568,6 +577,7 @@
     updateStatusIndicators();
     updateAutoMode();
     updateDraftSource();
+    updateAutoGenerate();
     renderRequestContext();
     $("#collapse-all").checked = collapseAll;
     $("#messages").innerHTML = entries.map((entry, index) => {
@@ -609,6 +619,8 @@
     }).join("") + (state.busy?.kind === "swap" || state.run_complete ? "" : state.busy?.kind === "target" ?
       `<article class="message gray pending"><div class="bubble"><span class="pending-text">Pending response from provider.</span></div></article>` :
       last?.side === "gray" ?
+        state.auto_generate === false && !state.draft_pending ?
+          `<article class="message blue draft-add"><button type="button" data-action="refresh-draft" aria-label="Generate next request" title="Generate next request">+</button></article>` :
         state.draft_source === "api" ?
           state.draft_pending ?
             `<article class="message blue pending"><div class="bubble"><span class="pending-text">Generating draft from API.</span></div></article>` :
@@ -656,10 +668,11 @@
     try {
       const response = await fetch(stateUrl, {cache: "no-store"});
       const next = await response.json();
-      const signature = JSON.stringify(next.entries.map((e) => [e.id, e.revision, e.status])) + JSON.stringify(next.busy) + next.error + next.auto_mode + next.run_complete + next.draft_source + next.draft_pending + next.draft_error + JSON.stringify(next.auditor_exchange) + JSON.stringify(next.auditor_history);
+      const signature = JSON.stringify(next.entries.map((e) => [e.id, e.revision, e.status])) + JSON.stringify(next.busy) + next.error + next.auto_mode + next.auto_generate + next.run_complete + next.draft_source + next.draft_pending + next.draft_error + JSON.stringify(next.auditor_exchange) + JSON.stringify(next.auditor_history);
       state = next;
       updateAutoMode();
       updateDraftSource();
+      updateAutoGenerate();
       if (!force && signature === lastSignature) return;
       lastSignature = signature;
       if (document.activeElement?.tagName === "TEXTAREA" && !force && !next.busy) return;
@@ -1127,21 +1140,55 @@
       updateAutoMode();
     }
   });
-  $("#api-mode").addEventListener("change", async (event) => {
+  $("#auto-generate").addEventListener("change", async (event) => {
     const input = event.target;
-    changingDraftSource = true;
+    changingAutoGenerate = true;
     input.disabled = true;
     try {
       await finishEdits();
-      const result = await api("/api/draft-source", {source: input.checked ? "api" : "codex"});
+      const result = await api("/api/auto-generate", {enabled: input.checked});
+      state.auto_generate = result.auto_generate;
+      await refresh(true, true);
+    } catch (error) {
+      showNotice(error.message, true);
+    } finally {
+      changingAutoGenerate = false;
+      input.disabled = false;
+      updateAutoGenerate();
+    }
+  });
+  $("#draft-source-control").addEventListener("click", async (event) => {
+    const input = event.target.closest("[data-source]");
+    if (!input || changingDraftSource || input.dataset.source === state?.draft_source) return;
+    changingDraftSource = true;
+    $("#draft-source-control").querySelectorAll("button").forEach((button) => { button.disabled = true; });
+    try {
+      await finishEdits();
+      const result = await api("/api/draft-source", {source: input.dataset.source});
       state.draft_source = result.draft_source;
       await refresh(true, true);
     } catch (error) {
       showNotice(error.message, true);
     } finally {
       changingDraftSource = false;
-      input.disabled = false;
+      $("#draft-source-control").querySelectorAll("button").forEach((button) => { button.disabled = false; });
       updateDraftSource();
+    }
+  });
+  const settingsButton = $("#settings-button");
+  const settingsPanel = $("#settings-panel");
+  function setSettingsOpen(open) {
+    settingsPanel.hidden = !open;
+    settingsButton.setAttribute("aria-expanded", String(open));
+  }
+  settingsButton.addEventListener("click", () => setSettingsOpen(settingsPanel.hidden));
+  document.addEventListener("pointerdown", (event) => {
+    if (!settingsPanel.hidden && !event.target.closest(".settings-wrap")) setSettingsOpen(false);
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && !settingsPanel.hidden) {
+      setSettingsOpen(false);
+      settingsButton.focus();
     }
   });
   $("#trace-select").addEventListener("change", (event) => selectTrace(event.target.value));

@@ -151,6 +151,7 @@ def load_state():
     if STATE_FILE.exists():
         state = json.loads(STATE_FILE.read_text())
         state.setdefault("auto_mode", False)
+        state.setdefault("auto_generate", True)
         state.setdefault("run_complete", False)
         state.setdefault("draft_source", "codex")
         state.setdefault("draft_generation", 0)
@@ -164,6 +165,7 @@ def load_state():
     if snapshot.is_file():
         state = json.loads(snapshot.read_text())
         state.setdefault("auto_mode", False)
+        state.setdefault("auto_generate", True)
         state.setdefault("run_complete", False)
         state.setdefault("draft_source", "codex")
         state.setdefault("draft_generation", 0)
@@ -174,7 +176,7 @@ def load_state():
         save_state(state)
         return state
     state = {"version": 1, "next_id": 1, "entries": [], "busy": None, "error": None,
-             "auto_mode": False, "run_complete": False, "draft_source": "codex",
+             "auto_mode": False, "auto_generate": True, "run_complete": False, "draft_source": "codex",
              "draft_generation": 0, "draft_pending": False, "draft_error": None,
              "auditor_exchange": [], "auditor_history": []}
     make_entry(state, "blue", default_request(), "draft")
@@ -620,11 +622,13 @@ def run_api_draft(trace_id, target_id, target_revision, generation):
                 event("api_draft_failed", target_id=target_id, error=str(exc))
 
 
-def queue_next_draft(state, reason):
+def queue_next_draft(state, reason, force=False):
     if state["run_complete"] or not state["entries"] or state["entries"][-1]["side"] != "gray":
         return
     target = state["entries"][-1]
     state["auditor_exchange"] = []
+    if not state["auto_generate"] and not force:
+        return
     if state["draft_source"] == "api":
         state["draft_generation"] += 1
         state["draft_pending"] = True
@@ -661,6 +665,10 @@ def queue_next_draft(state, reason):
                    "the next full outgoing request via POST /api/codex-draft. Do not send it to the "
                    "target; the human must approve the blue bubble. This is a local UI notification, "
                    "not a new task.")
+    if force and not state["auto_generate"]:
+        state["draft_pending"] = True
+        state["draft_error"] = None
+        save_state(state)
     threading.Thread(target=notify_codex, args=(message,), daemon=True).start()
 
 
@@ -1010,8 +1018,26 @@ class Handler(BaseHTTPRequestHandler):
                     waiting_for_auditor = (state["auditor_exchange"]
                                            and state["auditor_exchange"][-1]["answer"] is None)
                     if (enabled and state["entries"][-1]["side"] == "gray"
-                            and not state["draft_pending"] and not waiting_for_auditor):
+                            and state["auto_generate"] and not state["draft_pending"] and not waiting_for_auditor):
                         queue_next_draft(state, "auto enabled")
+                    return
+                if path == "/api/auto-generate":
+                    enabled = data.get("enabled")
+                    if not isinstance(enabled, bool):
+                        raise ValueError("enabled must be a boolean.")
+                    if enabled != state["auto_generate"]:
+                        state["auto_generate"] = enabled
+                        if not enabled:
+                            state["draft_generation"] += 1
+                            state["draft_pending"] = False
+                            state["draft_error"] = None
+                            state["auditor_exchange"] = []
+                        save_state(state)
+                        event("auto_generate_changed", enabled=enabled)
+                        if (enabled and not state["busy"] and not state["run_complete"]
+                                and state["entries"][-1]["side"] == "gray"):
+                            queue_next_draft(state, "auto-generate enabled")
+                    self.send(200, {"auto_generate": state["auto_generate"]})
                     return
                 if path == "/api/draft-source":
                     source = data.get("source")
@@ -1116,7 +1142,7 @@ class Handler(BaseHTTPRequestHandler):
                         raise ValueError("A trace with that id already exists.")
                     snapshot_active_trace(catalog)
                     fresh = {"version": 1, "next_id": 1, "entries": [], "busy": None, "error": None,
-                             "auto_mode": False, "run_complete": False, "draft_source": "codex",
+                             "auto_mode": False, "auto_generate": False, "run_complete": False, "draft_source": "codex",
                              "draft_generation": 0, "draft_pending": False, "draft_error": None,
                              "auditor_exchange": [], "auditor_history": []}
                     make_entry(fresh, "blue", blank_request(), "draft")
@@ -1235,7 +1261,7 @@ class Handler(BaseHTTPRequestHandler):
                     state["auditor_exchange"] = []
                     save_state(state)
                     self.send(200, {"ok": True})
-                    queue_next_draft(state, "refresh requested")
+                    queue_next_draft(state, "refresh requested", force=True)
                     return
                 if path == "/api/rewind":
                     target = current_entry(state, int(data["id"]))

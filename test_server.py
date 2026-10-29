@@ -214,6 +214,7 @@ class MetriTest(unittest.TestCase):
         self.post("new-trace", {"id": "fresh-e111", "name": "~/metri/E111"})
         self.assertEqual(self.get_traces()["active"], "fresh-e111")
         fresh = self.get()
+        self.assertFalse(fresh["auto_generate"])
         request = json.loads(fresh["entries"][0]["current_text"])
         self.assertEqual(request["model"], "")
         self.assertNotIn("access_programs", request)
@@ -391,6 +392,72 @@ class MetriTest(unittest.TestCase):
                 time.sleep(.01)
             self.assertTrue(wake.called)
             self.assertIn("gray response pending", wake.call_args.args[0])
+
+    def test_auto_generate_off_waits_for_explicit_draft_request(self):
+        first = json.loads(self.get()["entries"][0]["current_text"])
+        first["input"][0]["content"] = "Investigate"
+        with mock.patch.object(server, "notify_codex") as wake:
+            self.post("auto-generate", {"enabled": False})
+            self.post("auto-mode", {"enabled": True})
+            self.post("auto-send", {"id": 1, "text": json.dumps(first)})
+            state = self.await_idle()
+            self.assertEqual(len(state["entries"]), 2)
+            self.assertEqual(state["entries"][-1]["side"], "gray")
+            self.assertFalse(state["draft_pending"])
+            self.assertFalse(wake.called)
+            self.post("draft-source", {"source": "api"})
+            self.assertFalse(self.get()["draft_pending"])
+            self.post("draft-source", {"source": "codex"})
+            self.post("refresh-draft", {"id": 2})
+            for _ in range(100):
+                if wake.called:
+                    break
+                time.sleep(.01)
+            self.assertTrue(wake.called)
+            self.assertTrue(self.get()["draft_pending"])
+            self.assertEqual(len(self.target_requests), 1)
+
+    def test_turning_auto_generate_on_queues_waiting_gray(self):
+        first = json.loads(self.get()["entries"][0]["current_text"])
+        first["input"][0]["content"] = "Investigate"
+        with mock.patch.object(server, "notify_codex") as wake:
+            self.post("auto-generate", {"enabled": False})
+            self.post("approve", {"id": 1, "text": json.dumps(first)})
+            self.await_idle()
+            self.assertFalse(wake.called)
+            self.post("auto-generate", {"enabled": True})
+            for _ in range(100):
+                if wake.called:
+                    break
+                time.sleep(.01)
+            self.assertTrue(wake.called)
+            self.assertTrue(self.get()["auto_generate"])
+
+    def test_api_drafting_waits_for_plus_when_auto_generate_off(self):
+        calls = []
+        def fake_api(request):
+            calls.append(copy.deepcopy(request))
+            if request["instructions"].startswith("You draft the next blue request"):
+                proposal = {"items": [{"type": "function_call_output", "call_id": "call_1", "output": "ok"}]}
+                return {"output": [{"type": "message", "content": [
+                    {"type": "output_text", "text": json.dumps(proposal)}]}]}
+            return {"output": [{"type": "function_call", "name": "setup",
+                "call_id": "call_1", "arguments": "{}"}]}
+        server.call_api = fake_api
+        self.post("auto-generate", {"enabled": False})
+        self.post("draft-source", {"source": "api"})
+        first = json.loads(self.get()["entries"][0]["current_text"])
+        first["input"][0]["content"] = "Investigate"
+        self.post("approve", {"id": 1, "text": json.dumps(first)})
+        state = self.await_idle()
+        self.assertEqual(len(state["entries"]), 2)
+        self.assertEqual(len(calls), 1)
+        self.assertFalse(state["draft_pending"])
+        self.post("refresh-draft", {"id": 2})
+        state = self.await_draft()
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(len(state["entries"]), 3)
+        self.assertEqual(len(self.target_requests), 0)
 
     def test_api_source_creates_editable_draft_without_sending_target(self):
         calls = []
