@@ -24,7 +24,9 @@ STATE_FILE = DATA / "session.json"
 EVENTS_FILE = DATA / "events.jsonl"
 LOCK = threading.RLock()
 API_URL = "https://api.openai.com/v1/responses"
-CODEX_THREAD_ID = os.environ.get("REVIEW_ROOM_CODEX_THREAD_ID") or os.environ.get("CODEX_THREAD_ID")
+OPENROUTER_URL = "https://openrouter.ai/api/v1/responses"
+GLM_MODEL = "z-ai/glm-5.3"
+CODEX_THREAD_ID = os.environ.get("METRI_CODEX_THREAD_ID") or os.environ.get("CODEX_THREAD_ID")
 
 
 def now():
@@ -318,6 +320,30 @@ def call_api(payload):
         raise RuntimeError(f"OpenAI HTTP {exc.code}: {body[:2500]}") from exc
 
 
+def call_glm(original):
+    key = os.environ.get("OPENROUTER_API_KEY")
+    if not key:
+        raise RuntimeError("Set OPENROUTER_API_KEY before starting Metri.")
+    payload = {field: copy.deepcopy(original[field]) for field in
+               ("instructions", "input", "tools", "tool_choice", "max_output_tokens", "temperature", "top_p")
+               if field in original}
+    payload["model"] = GLM_MODEL
+    payload["store"] = False
+    payload["reasoning"] = {"effort": "high", "exclude": False}
+    payload["input"] = [item for item in payload["input"] if item.get("type") != "reasoning"]
+    request = urllib.request.Request(
+        OPENROUTER_URL, data=json.dumps(payload).encode(), method="POST",
+        headers={"Authorization": "Bearer " + key, "Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=180) as response:
+            result = json.load(response)
+    except urllib.error.HTTPError as exc:
+        raise RuntimeError(f"OpenRouter HTTP {exc.code}: {exc.read().decode(errors='replace')[:1500]}") from exc
+    validate_target(result)
+    return result
+
+
 def notify_codex(message):
     """Best-effort local wake-up; the session ledger remains authoritative."""
     if not CODEX_THREAD_ID:
@@ -445,7 +471,7 @@ def run_api_draft(trace_id, target_id, target_revision, generation):
             auditor_exchange = copy.deepcopy(state["auditor_exchange"])
             auditor_history = copy.deepcopy(state["auditor_history"])
             trace = next(item for item in load_traces()["traces"] if item["id"] == trace_id)
-        model = os.environ.get("BETTER_PETRI_DRAFT_MODEL") or previous["model"]
+        model = os.environ.get("METRI_DRAFT_MODEL") or previous["model"]
         context = api_draft_context(previous, target_value, trace)
         context["send_mode"] = "auto with Codex approval" if auto_mode else "manual with human approval"
         if auditor_exchange:
@@ -772,6 +798,35 @@ def run_approved(entry_id):
             event("request_failed", entry_id=entry_id, error=str(exc))
 
 
+def run_glm_swap(trace_id, target_id, target_revision, request):
+    try:
+        response = call_glm(request)
+        with LOCK:
+            state = load_state()
+            target = current_entry(state, target_id)
+            if (load_traces()["active"] != trace_id or not target
+                    or target["revision"] != target_revision
+                    or state["busy"] != {"kind": "swap", "entry_id": target_id}):
+                return
+            before = target["current_text"]
+            state["busy"] = None
+            update_entry(state, target_id, dump(response))
+            state["error"] = None
+            save_state(state)
+            event("gray_swapped_to_glm", entry_id=target_id, before=before,
+                  after=target["current_text"], source_request=request)
+            if state["entries"][-1]["side"] == "gray":
+                queue_next_draft(state, "gray response replaced")
+    except Exception as exc:
+        with LOCK:
+            state = load_state()
+            if state["busy"] == {"kind": "swap", "entry_id": target_id}:
+                state["busy"] = None
+                state["error"] = str(exc)
+                save_state(state)
+                event("gray_swap_failed", entry_id=target_id, error=str(exc))
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
         if not (self.command == "GET" and self.path == "/api/state"):
@@ -967,6 +1022,34 @@ class Handler(BaseHTTPRequestHandler):
                     save_state(state)
                     self.send(200, {"entry": entry})
                     return
+                if path == "/api/swap-glm":
+                    if state["auto_mode"]:
+                        raise ValueError("Turn Auto off before replacing a response.")
+                    target = current_entry(state, int(data["id"]))
+                    if not target or target["side"] != "gray" or target not in state["entries"][-2:]:
+                        raise ValueError("Only the current gray response can be replaced.")
+                    if (state["entries"][-1]["side"] == "blue"
+                            and state["entries"][-1]["status"] not in {"draft", "stale"}):
+                        raise ValueError("The following blue request must be unsent.")
+                    if not os.environ.get("OPENROUTER_API_KEY"):
+                        raise ValueError("Set OPENROUTER_API_KEY before starting Metri.")
+                    index = state["entries"].index(target)
+                    source = parsed(state["entries"][index - 1])
+                    validate_request(source)
+                    state["busy"] = {"kind": "swap", "entry_id": target["id"]}
+                    state["draft_generation"] += 1
+                    state["draft_pending"] = False
+                    state["draft_error"] = None
+                    state["auditor_exchange"] = []
+                    state["error"] = None
+                    trace_id = load_traces()["active"]
+                    save_state(state)
+                    event("gray_swap_requested", entry_id=target["id"], model=GLM_MODEL)
+                    self.send(202, {"ok": True})
+                    threading.Thread(target=run_glm_swap,
+                                     args=(trace_id, target["id"], target["revision"], source),
+                                     daemon=True).start()
+                    return
                 if path in {"/api/approve", "/api/auto-send"}:
                     if state["run_complete"]:
                         raise ValueError("This run is complete. Rewind to continue it.")
@@ -1099,7 +1182,7 @@ class Handler(BaseHTTPRequestHandler):
 
 def main():
     import argparse
-    parser = argparse.ArgumentParser(description="Run the local review room.")
+    parser = argparse.ArgumentParser(description="Run the local Metri.")
     parser.add_argument("--port", type=int, default=8765)
     args = parser.parse_args()
     with LOCK:
@@ -1111,7 +1194,7 @@ def main():
             save_state(state)
         sync_all_experiment_cards()
     server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
-    print(f"Review room: http://127.0.0.1:{args.port}", flush=True)
+    print(f"Metri: http://127.0.0.1:{args.port}", flush=True)
     server.serve_forever()
 
 

@@ -7,11 +7,17 @@
   let timers = new Map();
   let saving = new Map();
   let lastSignature = "";
-  const viewModeKey = "better-petri:view-mode:v1";
-  const collapseKey = (traceId) => `better-petri:collapse:v1:${traceId}`;
-  const scrollKey = (traceId) => `better-petri:scroll:v1:${traceId}`;
+  const viewModeKey = "metri:view-mode:v1";
+  const collapseKey = (traceId) => `metri:collapse:v1:${traceId}`;
+  const scrollKey = (traceId) => `metri:scroll:v1:${traceId}`;
   function storedValue(key) {
-    try { return localStorage.getItem(key); }
+    try {
+      const current = localStorage.getItem(key);
+      if (current !== null) return current;
+      const old = localStorage.getItem(key.replace(/^metri:/, "better-petri:"));
+      if (old !== null) localStorage.setItem(key, old);
+      return old;
+    }
     catch { return null; }
   }
   function storeValue(key, value) {
@@ -36,6 +42,7 @@
   const pencil = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4l11.1-11.1a2.1 2.1 0 0 0-3-3L5 17v3Z"/><path d="m14.7 7.3 3 3"/></svg>';
   const rewindIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 7-4 4 4 4"/><path d="M5 11h10a5 5 0 0 1 0 10h-2"/></svg>';
   const refreshIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.4 6.6"/><path d="M20 5v6h-6"/></svg>';
+  const swapIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h16m-4-4 4 4-4 4M20 16H4m4-4-4 4 4 4"/></svg>';
   const approveIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 4.5 4.5L19 7"/></svg>';
   const collapseIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>';
 
@@ -128,6 +135,8 @@
     return items.flatMap((item) => {
       if (item.type === "function_call") return [{label: item.name || "Tool", text: item.arguments || "", tool: true}];
       if (item.type === "function_call_output") return [{label: `${names.get(item.call_id) || "Tool"} result`, text: toolResultText(item.output), tool: true}];
+      if (item.type === "reasoning") return (item.content || []).filter((part) => part.type === "reasoning_text")
+        .map((part) => ({label: "Reasoning", text: part.text || "", tool: true}));
       const content = item.content;
       if (typeof content === "string") return [{label: "Message", text: content, tool: false}];
       if (Array.isArray(content)) return content.filter((part) =>
@@ -195,7 +204,8 @@
       if (typeof item.output === "string") parts.push({path: [key, index, "output"], label: `${names.get(item.call_id) || "Tool"} result`, value: item.output});
       if (typeof item.content === "string") parts.push({path: [key, index, "content"], label: "Message", value: item.content});
       if (Array.isArray(item.content)) item.content.forEach((content, partIndex) => {
-        if (typeof content.text === "string") parts.push({path: [key, index, "content", partIndex, "text"], label: "Message", value: content.text});
+        if (typeof content.text === "string") parts.push({path: [key, index, "content", partIndex, "text"],
+          label: item.type === "reasoning" ? "Reasoning" : "Message", value: content.text});
       });
     }
     return parts.length ? parts : [{path: null, label: "JSON", value: raw}];
@@ -421,7 +431,10 @@
       const pen = !state.busy && (entry.side === "gray" || entry.status !== "stale") ?
         button(pencil, renderedEditors.has(entry.id) ? "Done editing" : "Edit message", "edit", "edit") : "";
       const caret = `<button class="collapse" type="button" title="${collapsed ? "Expand" : "Collapse"} bubble" aria-label="${collapsed ? "Expand" : "Collapse"} bubble" aria-expanded="${!collapsed}" data-action="collapse">${collapseIcon}</button>`;
-      const taps = `<div class="tapback">${controls}${pen}${caret}</div>`;
+      const swappable = entry.side === "gray" && !state.busy && !state.auto_mode &&
+        (entry === last || (index === entries.length - 2 && last?.side === "blue" && ["draft", "stale"].includes(last.status)));
+      const swap = swappable ? button(swapIcon, "Replace with GLM 5.3", "swap-glm") : "";
+      const taps = `<div class="tapback">${controls}${swap}${pen}${caret}</div>`;
       const editors = editing ? `<div class="render-editors">${editableParts(entry).map((part) =>
         `<label class="render-editor"><span>${escapeHtml(part.label)}</span><textarea spellcheck="false" data-id="${entry.id}" data-editor-path="${escapeHtml(part.path ? JSON.stringify(part.path) : "")}"></textarea></label>`
       ).join("")}</div>` : "";
@@ -435,7 +448,9 @@
         `<article class="message auditor"><div class="message-head">Auditor question</div><div class="bubble"><div class="auditor-part">${escapeHtml(exchange.question)}</div>${exchange.answer == null ? "" : `<div class="auditor-answer"><div class="auditor-part-label">Answer to auditor</div><div class="auditor-part">${escapeHtml(exchange.answer)}</div></div>`}</div></article>`
       ).join("");
       return message + auditor;
-    }).join("") + (state.run_complete ? "" : state.busy?.kind === "target" ?
+    }).join("") + (state.busy?.kind === "swap" ?
+      `<article class="message gray pending"><div class="bubble"><span class="pending-text">Pending GLM 5.3 response.</span></div></article>` :
+      state.run_complete ? "" : state.busy?.kind === "target" ?
       `<article class="message gray pending"><div class="bubble"><span class="pending-text">Pending response from provider.</span></div></article>` :
       last?.side === "gray" ?
         state.draft_source === "api" ?
@@ -443,7 +458,7 @@
             `<article class="message blue pending"><div class="bubble"><span class="pending-text">Generating draft from API.</span></div></article>` :
             state.auditor_exchange?.at(-1)?.answer === null ? "" :
               `<div class="auditor-note">${escapeHtml(state.draft_error || "No API draft pending.")}</div>` :
-          `<article class="message blue pending"><div class="bubble"><span class="pending-text">Pending a response from your agent.</span><p class="pending-advice">If it stalls, send: “Read review_room/data/session.json and POST a full draft to /api/codex-draft. Do not call the target.”</p></div></article>` : "");
+          `<article class="message blue pending"><div class="bubble"><span class="pending-text">Pending a response from your agent.</span><p class="pending-advice">If it stalls, send: “Read metri/data/session.json and POST a full draft to /api/codex-draft. Do not call the target.”</p></div></article>` : "");
     entries.forEach((entry) => {
       if (isCollapsed(entry)) return;
       const el = $(`#m-${entry.id} ${viewMode === "raw" ? ".raw-editor" : ".message-text"}`);
@@ -699,6 +714,13 @@
         await api("/api/refresh-draft", {id});
         renderedEditors.delete(id);
         saveError = false;
+        await refresh(true, true);
+        return;
+      } else if (name === "swap-glm") {
+        if (!confirm(`Replace gray #${id} with a new GLM 5.3 response?`)) return;
+        for (const editedId of [...edits.keys()]) await saveEdit(editedId);
+        await Promise.allSettled([...saving.values()]);
+        await api("/api/swap-glm", {id});
         await refresh(true, true);
         return;
       } else if (name === "rewind") {

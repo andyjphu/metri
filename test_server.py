@@ -11,13 +11,14 @@ import urllib.request
 from pathlib import Path
 from unittest import mock
 
-from review_room import server
+from metri import server
 
 
-class ReviewRoomTest(unittest.TestCase):
+class MetriTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
-        self.original = (server.DATA, server.STATE_FILE, server.EVENTS_FILE, server.call_api, server.CODEX_THREAD_ID)
+        self.original = (server.DATA, server.STATE_FILE, server.EVENTS_FILE, server.call_api,
+                         server.call_glm, server.CODEX_THREAD_ID)
         server.DATA = Path(self.tmp.name)
         server.STATE_FILE = server.DATA / "session.json"
         server.EVENTS_FILE = server.DATA / "events.jsonl"
@@ -51,7 +52,8 @@ class ReviewRoomTest(unittest.TestCase):
         self.http.shutdown()
         self.http.server_close()
         self.thread.join(timeout=2)
-        server.DATA, server.STATE_FILE, server.EVENTS_FILE, server.call_api, server.CODEX_THREAD_ID = self.original
+        (server.DATA, server.STATE_FILE, server.EVENTS_FILE, server.call_api,
+         server.call_glm, server.CODEX_THREAD_ID) = self.original
         self.tmp.cleanup()
 
     def get(self):
@@ -90,8 +92,8 @@ class ReviewRoomTest(unittest.TestCase):
         self.assertIn("## System prompt", card.read_text())
         self.assertEqual(self.get_traces()["active"], "current")
         self.post("draft-source", {"source": "api"})
-        self.post("rename-trace", {"name": "~/better-petri/E110"})
-        self.assertEqual(self.get_traces()["traces"][0]["name"], "~/better-petri/E110")
+        self.post("rename-trace", {"name": "~/metri/E110"})
+        self.assertEqual(self.get_traces()["traces"][0]["name"], "~/metri/E110")
         request = json.loads(opening["entries"][0]["current_text"])
         request["instructions"] = "Changed first prompt"
         request["temperature"] = 0.42
@@ -99,7 +101,7 @@ class ReviewRoomTest(unittest.TestCase):
         self.assertIn("Changed first prompt", card.read_text())
         self.assertIn('"temperature": 0.42', card.read_text())
         self.post("experiment-note", {"note": "AI description of the local setup.", "references": [
-            {"label": "Instructions", "path": "review_room/README.md"}]})
+            {"label": "Instructions", "path": "metri/README.md"}]})
         self.assertIn("AI description of the local setup.", card.read_text())
 
         other = copy.deepcopy(opening)
@@ -110,7 +112,7 @@ class ReviewRoomTest(unittest.TestCase):
         directory.mkdir(parents=True)
         (directory / "session.json").write_text(json.dumps(other))
         catalog = self.get_traces()
-        catalog["traces"].append({"id": "archive", "name": "~/better-petri/archive"})
+        catalog["traces"].append({"id": "archive", "name": "~/metri/archive"})
         server.save_traces(catalog)
 
         self.post("select-trace", {"id": "archive"})
@@ -162,7 +164,7 @@ class ReviewRoomTest(unittest.TestCase):
         old = self.get()
         old_request = json.loads(old["entries"][0]["current_text"])
         self.assertEqual(old_request["model"], "test-model")
-        self.post("new-trace", {"id": "fresh-e111", "name": "~/better-petri/E111"})
+        self.post("new-trace", {"id": "fresh-e111", "name": "~/metri/E111"})
         self.assertEqual(self.get_traces()["active"], "fresh-e111")
         fresh = self.get()
         request = json.loads(fresh["entries"][0]["current_text"])
@@ -218,6 +220,37 @@ class ReviewRoomTest(unittest.TestCase):
         self.assertEqual(len(self.target_requests), 2)
         self.assertEqual(self.target_requests[1]["input"][-1]["output"], '{"stdout":"human approved edit"}')
         self.assertEqual(self.target_requests[1]["input"][-2]["arguments"], '{"edited":true}')
+
+    def test_glm_swap_replaces_current_gray_and_invalidates_following_draft(self):
+        first = json.loads(self.get()["entries"][0]["current_text"])
+        first["input"][0]["content"] = "Investigate"
+        self.post("approve", {"id": 1, "text": json.dumps(first)})
+        self.await_idle()
+        gray = self.get()["entries"][-1]
+        draft = copy.deepcopy(first)
+        draft["input"] += json.loads(gray["current_text"])["output"] + [
+                           {"type": "function_call_output", "call_id": "call_1", "output": "{}"}]
+        self.post("codex-draft", {"request": draft})
+        original = json.loads(gray["current_text"])
+        seen = []
+        def fake_glm(request):
+            seen.append(copy.deepcopy(request))
+            return {"model": server.GLM_MODEL, "output": [
+                {"type": "reasoning", "content": [{"type": "reasoning_text", "text": "I should inspect."}]},
+                {"type": "function_call", "name": "setup", "call_id": "call_glm", "arguments": "{}"}]}
+        server.call_glm = fake_glm
+        with mock.patch.dict("os.environ", {"OPENROUTER_API_KEY": "test-key"}):
+            self.post("swap-glm", {"id": gray["id"]})
+            state = self.await_idle()
+        swapped = json.loads(state["entries"][1]["current_text"])
+        self.assertEqual(len(seen), 1)
+        self.assertEqual(len(self.target_requests), 1)
+        self.assertEqual(swapped["model"], server.GLM_MODEL)
+        self.assertEqual(swapped["output"][0]["content"][0]["text"], "I should inspect.")
+        self.assertEqual(state["entries"][-1]["status"], "stale")
+        self.assertNotEqual(swapped["output"], original["output"])
+        events = [json.loads(line) for line in server.EVENTS_FILE.read_text().splitlines()]
+        self.assertTrue(any(event["kind"] == "gray_swapped_to_glm" for event in events))
 
     def test_auto_send_requires_explicit_session_switch_and_logs_exact_request(self):
         opening = self.get()["entries"][0]
