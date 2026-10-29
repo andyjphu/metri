@@ -14,13 +14,13 @@ Open **System prompt & settings** at the top of the conversation to inspect the 
 
 Blue bubbles contain the full request JSON. Gray bubbles contain the full agent response JSON. The pencil beside a bubble opens editing, including for earlier messages. Earlier edits update the matching history in later blue requests while keeping later bubbles. ✓ approves and sends a blue draft; ↻ asks Codex to redo the draft without calling the target. Editing the gray response immediately before an unsent blue draft marks that draft stale until ↻ replaces it. In Manual mode, no request reaches the agent before ✓. Scroll to an earlier bubble and tap ↶ to delete everything after it and continue in the same conversation.
 
-The Collapse slider folds every bubble to one line. The caret beside a bubble's edit control folds or expands just that bubble. Folding changes only the view, not the saved conversation.
+The Collapse slider folds every bubble to one line. The caret beside a bubble's edit control folds or expands just that bubble. Folding changes only the view, not the saved conversation. The browser remembers the collapse choices for each trace.
 
 For an unattended run, ask the auditor to use autonomous mode. Its setting and the harness calls are in the packaged [Better Petri skill](skills/better-petri/SKILL.md); there is no Auto control in the page.
 
 The save indicator shows the time since the local session was saved, rounded to five-second steps for the first minute. It shows pending edits or failures when applicable. If a save is pending when you tap ✓, the page warns and finishes saving before sending. The blue editor's current JSON is included in the approval request itself.
 
-Use Raw for editable JSON or Rendered for message text with line breaks and other whitespace displayed. Rendered shows each tool call and result in its own labeled section and leaves Markdown markers as text. Tap the pencil to edit message or tool fields in Rendered. Switching views keeps the current message selected. The old Cleaned view is hidden, retained in code for now, and considered for deprecation; it will receive no future updates.
+Use Raw for editable JSON or Rendered for message text with line breaks and other whitespace displayed. Rendered shows each tool call and result in its own labeled section and leaves Markdown markers as text. Tap the pencil to edit message or tool fields in Rendered. The browser remembers the selected view and scroll position on reload. The old Cleaned view is hidden, retained in code for now, and considered for deprecation; it will receive no future updates.
 
 The first request has an empty task. Add one before approving it. After the agent responds, the server queues this Codex thread to write the next blue draft. Queue delivery is best-effort; if no draft appears, return to this chat. No separate auditor model runs in the app.
 

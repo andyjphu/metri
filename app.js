@@ -7,7 +7,19 @@
   let timers = new Map();
   let saving = new Map();
   let lastSignature = "";
-  let viewMode = "raw";
+  const viewModeKey = "better-petri:view-mode:v1";
+  const collapseKey = (traceId) => `better-petri:collapse:v1:${traceId}`;
+  const scrollKey = (traceId) => `better-petri:scroll:v1:${traceId}`;
+  function storedValue(key) {
+    try { return localStorage.getItem(key); }
+    catch { return null; }
+  }
+  function storeValue(key, value) {
+    try { localStorage.setItem(key, value); }
+    catch { /* Display preferences remain usable when storage is unavailable. */ }
+  }
+  const storedViewMode = storedValue(viewModeKey);
+  let viewMode = ["raw", "rendered"].includes(storedViewMode) ? storedViewMode : "raw";
   let collapseAll = false;
   const collapseOverrides = new Map();
   const previewCache = new Map();
@@ -15,12 +27,40 @@
   let saveError = false;
   let traces = null;
   let switchingTrace = false;
+  let scrollPersistenceSuspended = true;
+  let scrollSaveTimer = null;
   const renderedEditors = new Set();
   const pencil = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4l11.1-11.1a2.1 2.1 0 0 0-3-3L5 17v3Z"/><path d="m14.7 7.3 3 3"/></svg>';
   const rewindIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 7-4 4 4 4"/><path d="M5 11h10a5 5 0 0 1 0 10h-2"/></svg>';
   const refreshIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.4 6.6"/><path d="M20 5v6h-6"/></svg>';
   const approveIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 4.5 4.5L19 7"/></svg>';
   const collapseIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>';
+
+  function syncViewMode() {
+    $("#view-mode").dataset.mode = viewMode;
+    $("#view-mode").querySelectorAll("[data-view]").forEach((button) =>
+      button.setAttribute("aria-pressed", String(button.dataset.view === viewMode)));
+  }
+
+  function loadCollapsePreferences(traceId) {
+    collapseAll = false;
+    collapseOverrides.clear();
+    try {
+      const saved = JSON.parse(storedValue(collapseKey(traceId)));
+      if (!saved || typeof saved !== "object") return;
+      collapseAll = saved.all === true;
+      if (Array.isArray(saved.overrides)) {
+        for (const [id, collapsed] of saved.overrides) {
+          if (Number.isSafeInteger(id) && typeof collapsed === "boolean") collapseOverrides.set(id, collapsed);
+        }
+      }
+    } catch { /* Ignore absent or invalid saved preferences. */ }
+  }
+
+  function saveCollapsePreferences() {
+    if (!traces?.active) return;
+    storeValue(collapseKey(traces.active), JSON.stringify({all: collapseAll, overrides: [...collapseOverrides]}));
+  }
 
   function isCollapsed(entry) {
     return collapseOverrides.get(entry.id) ?? collapseAll;
@@ -293,25 +333,29 @@
     selector.disabled = true;
     try {
       await finishEdits();
+      clearTimeout(scrollSaveTimer);
+      saveScrollPosition();
+      scrollPersistenceSuspended = true;
       await api("/api/select-trace", {id});
       timers.forEach(clearTimeout);
       timers.clear();
       edits.clear();
       saving.clear();
       renderedEditors.clear();
-      collapseOverrides.clear();
       previewCache.clear();
       selected = null;
       lastSignature = "";
       history.replaceState(null, "", location.pathname);
       await loadTraces();
+      loadCollapsePreferences(traces.active);
       await refresh(true);
-      $("#stream").scrollTop = 0;
+      restoreScrollPosition();
       showNotice("");
     } catch (error) {
       selector.value = traces.active;
       showNotice(error.message, true);
     } finally {
+      scrollPersistenceSuspended = false;
       switchingTrace = false;
       selector.disabled = false;
     }
@@ -453,6 +497,53 @@
     return {id: anchor.id, fraction: (point - rect.top) / rect.height, point};
   }
 
+  function saveScrollPosition() {
+    if (scrollPersistenceSuspended || !traces?.active || !state) return;
+    const scroller = $("#stream");
+    const anchor = captureViewAnchor(scroller);
+    const editors = [...scroller.querySelectorAll("textarea[data-id]")]
+      .filter((el) => el.scrollTop || el.scrollLeft)
+      .map((el) => ({id: Number(el.dataset.id), path: el.dataset.editorPath ?? null,
+        top: el.scrollTop, left: el.scrollLeft}));
+    storeValue(scrollKey(traces.active), JSON.stringify({
+      top: scroller.scrollTop,
+      anchor: anchor && {id: anchor.id, fraction: anchor.fraction,
+        pointOffset: anchor.point - scroller.getBoundingClientRect().top},
+      editors,
+    }));
+  }
+
+  function scheduleScrollSave() {
+    if (scrollPersistenceSuspended) return;
+    clearTimeout(scrollSaveTimer);
+    scrollSaveTimer = setTimeout(saveScrollPosition, 150);
+  }
+
+  function restoreScrollPosition() {
+    let saved;
+    try { saved = JSON.parse(storedValue(scrollKey(traces.active))); }
+    catch { return false; }
+    if (!saved || !Number.isFinite(saved.top)) return false;
+    const scroller = $("#stream");
+    scroller.scrollTop = saved.top;
+    const anchor = saved.anchor;
+    const element = anchor && document.getElementById(anchor.id);
+    if (element && Number.isFinite(anchor.fraction) && Number.isFinite(anchor.pointOffset)) {
+      const rect = element.getBoundingClientRect();
+      scroller.scrollTop += rect.top + anchor.fraction * rect.height -
+        scroller.getBoundingClientRect().top - anchor.pointOffset;
+    }
+    for (const editor of saved.editors || []) {
+      const el = [...scroller.querySelectorAll(`textarea[data-id="${Number(editor.id)}"]`)]
+        .find((item) => (item.dataset.editorPath ?? null) === editor.path);
+      if (el) {
+        el.scrollTop = editor.top;
+        el.scrollLeft = editor.left;
+      }
+    }
+    return true;
+  }
+
   function keepPosition(update) {
     const scroller = $("#stream");
     const anchor = captureViewAnchor(scroller);
@@ -538,10 +629,14 @@
         if (!entry) return;
         const collapsed = !isCollapsed(entry);
         collapseOverrides.set(id, collapsed);
+        saveCollapsePreferences();
         keepMessageTop(id, () => setCollapsedDom(entry, collapsed));
         return;
       } else if (name === "edit") {
-        if (isCollapsed(state.entries.find((item) => item.id === id))) collapseOverrides.set(id, false);
+        if (isCollapsed(state.entries.find((item) => item.id === id))) {
+          collapseOverrides.set(id, false);
+          saveCollapsePreferences();
+        }
         if (renderedEditors.has(id)) {
           await saveEdit(id);
           renderedEditors.delete(id);
@@ -554,9 +649,8 @@
         }
         if (viewMode === "cleaned") {
           viewMode = "rendered";
-          $("#view-mode").dataset.mode = viewMode;
-          $("#view-mode").querySelectorAll("[data-view]").forEach((button) =>
-            button.setAttribute("aria-pressed", String(button.dataset.view === viewMode)));
+          storeValue(viewModeKey, viewMode);
+          syncViewMode();
         }
         await refresh(true, true);
         if (renderedEditors.has(id)) $(`#m-${id} textarea`)?.focus({preventScroll: true});
@@ -657,6 +751,7 @@
       await Promise.all([...saving.values()]);
       collapseAll = collapse;
       collapseOverrides.clear();
+      saveCollapsePreferences();
       keepPosition(() => state.entries.forEach((entry) => setCollapsedDom(entry, collapse)));
     } catch (error) {
       event.target.checked = collapseAll;
@@ -678,15 +773,27 @@
     const choice = event.target.closest("[data-view]");
     if (!choice || choice.dataset.view === viewMode) return;
     viewMode = choice.dataset.view;
-    $("#view-mode").dataset.mode = viewMode;
-    $("#view-mode").querySelectorAll("[data-view]").forEach((button) =>
-      button.setAttribute("aria-pressed", String(button.dataset.view === viewMode)));
+    storeValue(viewModeKey, viewMode);
+    syncViewMode();
     renderAtCurrentPosition();
   });
-  $("#stream").addEventListener("scroll", queueVisiblePreviews, {passive: true});
-  Promise.all([loadTraces(), refresh(true)]).then(() => {
-    const fromHash = Number(location.hash.replace("#m-", ""));
-    if (fromHash) jump(fromHash);
+  $("#stream").addEventListener("scroll", (event) => {
+    if (event.target === $("#stream")) queueVisiblePreviews();
+    scheduleScrollSave();
+  }, {capture: true, passive: true});
+  window.addEventListener("pagehide", () => {
+    clearTimeout(scrollSaveTimer);
+    saveScrollPosition();
+  });
+  syncViewMode();
+  loadTraces().then(async () => {
+    loadCollapsePreferences(traces.active);
+    await refresh(true);
+    if (!restoreScrollPosition()) {
+      const fromHash = Number(location.hash.replace("#m-", ""));
+      if (fromHash) jump(fromHash);
+    }
+    scrollPersistenceSuspended = false;
   }).catch((error) => showNotice(error.message, true));
   setInterval(() => { if (!switchingTrace) refresh(); }, 1100);
   setInterval(updateSaveStatus, 1000);
