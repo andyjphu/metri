@@ -27,6 +27,7 @@
   let saveError = false;
   let traces = null;
   let switchingTrace = false;
+  let sendingId = null;
   let scrollPersistenceSuspended = true;
   let scrollSaveTimer = null;
   const renderedEditors = new Set();
@@ -396,7 +397,7 @@
       const editable = isEditable(entry);
       const editing = editable && viewMode === "rendered" && renderedEditors.has(entry.id);
       const controls = entry.side === "blue" && ["draft", "stale"].includes(entry.status) ?
-        `${entry.status === "draft" ? button(approveIcon, "Approve and send", "approve", "approve") : ""}${index > 0 ? button(refreshIcon, "Refresh blue draft", "refresh-draft", "refresh-draft") : ""}` :
+        `${entry.status === "draft" && !state.busy && sendingId !== entry.id ? button(approveIcon, "Approve and send", "approve", "approve") : ""}${index > 0 ? button(refreshIcon, "Refresh blue draft", "refresh-draft", "refresh-draft") : ""}` :
         entry === last && entry.side === "gray" ? button(refreshIcon, "Refresh blue draft", "refresh-draft", "refresh-draft") :
         index < entries.length - 1 ? button(rewindIcon, "Delete later messages and return here", "rewind") : "";
       const pen = !state.busy && (entry.side === "gray" || entry.status !== "stale") ?
@@ -622,6 +623,7 @@
 
   async function action(name, id) {
     const last = state.entries.at(-1);
+    if (name === "approve" && sendingId !== null) return;
     try {
       if (name === "collapse") {
         await saveEdit(id);
@@ -686,6 +688,8 @@
       } else if (name === "approve") {
         if ((edits.size || saving.size || timers.size) &&
             !confirm("Edits are not saved locally yet. Finish saving, then send the current blue JSON?")) return;
+        sendingId = last.id;
+        $(`#m-${last.id} [data-action=approve]`)?.remove();
         clearTimeout(timers.get(last.id));
         timers.delete(last.id);
         if (saving.has(last.id)) await saving.get(last.id);
@@ -698,6 +702,7 @@
           throw Error("The agent response changed. Review a new draft before sending.");
         const draftText = edits.get(last.id) ?? state.entries.at(-1).current_text;
         await api("/api/approve", {id: last.id, text: draftText});
+        sendingId = null;
         edits.delete(last.id);
         saveError = false;
         selected = null;
@@ -708,7 +713,13 @@
         const newest = state.entries.at(-1);
         if (newest) jump(newest.id);
       }
-    } catch (error) { showNotice(error.message, true); }
+    } catch (error) {
+      if (name === "approve") {
+        sendingId = null;
+        await refresh(true, true);
+      }
+      showNotice(error.message, true);
+    }
   }
 
   document.addEventListener("input", (event) => {
