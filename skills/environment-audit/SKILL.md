@@ -16,7 +16,7 @@ Classify each finding precisely:
 - **Verified match:** exact source and implementation checked.
 - **Verified difference:** source specifies one behavior; the executed environment did another.
 - **Material reconstruction:** source leaves a consequential behavior open; the local choice could affect results.
-- **Unverified match:** exact source may exist but cannot currently be checked. State the concrete attempts and result, such as a linked repository returning 404. Do not write only “not verified” or “I have not checked.” If no attempt was made, say so and attempt verification before completing the audit.
+- **Could not resolve after trying:** the exact source could not be checked after concrete attempts. State what was tried and the result, such as the linked repository returning 404. In the report, say “could not be resolved after trying,” not merely “unresolved,” “not verified,” or “I have not checked.” If no attempt was made, attempt verification before completing the audit.
 - **Intentional perturbation:** a deliberate change from the established base made to test a hypothesis. Name the baseline behavior, changed behavior, agent-visible path, intended causal effect, and any control. Do not call every fidelity gap a perturbation.
 - **Missing analysis:** absent controls or graders that limit interpretation but did not change the agent-visible environment. Keep this separate from environment differences.
 
