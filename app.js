@@ -36,6 +36,7 @@
   let traces = null;
   let modelCatalog = null;
   let switchingTrace = false;
+  let traceRenameId = null;
   let changingAuto = false;
   let changingDraftSource = false;
   let changingAutoGenerate = false;
@@ -353,14 +354,33 @@
     const response = await fetch("/api/traces", {cache: "no-store"});
     if (!response.ok) throw Error("Could not load traces.");
     traces = await response.json();
-    const selector = $("#trace-select");
-    selector.replaceChildren(...traces.traces.map((trace) => {
-      const option = document.createElement("option");
-      option.value = trace.id;
-      option.textContent = trace.name;
-      return option;
-    }));
-    selector.value = traces.active;
+    const current = traces.traces.find((trace) => trace.id === traces.active);
+    $("#trace-current").textContent = current?.name || "Select trace";
+    const rows = traces.traces.map((trace) => {
+      const row = document.createElement("div");
+      row.className = "trace-row";
+      const choice = document.createElement("button");
+      choice.type = "button";
+      choice.className = "trace-choice";
+      choice.dataset.traceId = trace.id;
+      choice.textContent = trace.name;
+      choice.setAttribute("aria-current", trace.id === traces.active ? "true" : "false");
+      row.append(choice);
+      const rename = document.createElement("button");
+      rename.type = "button";
+      rename.className = "trace-row-rename";
+      rename.setAttribute("aria-label", `Rename ${trace.name}`);
+      rename.title = "Rename trace";
+      rename.innerHTML = pencil;
+      row.append(rename);
+      return row;
+    });
+    $("#trace-menu").replaceChildren(...rows);
+  }
+
+  function setTraceMenuOpen(open) {
+    $("#trace-menu").hidden = !open;
+    $("#trace-select").setAttribute("aria-expanded", String(open));
   }
 
   async function loadRailPoints() {
@@ -399,8 +419,8 @@
     const scale = track.clientHeight / Math.max(scroller.scrollHeight, 1);
     const segments = document.createDocumentFragment();
     for (const article of scroller.querySelectorAll(".message[data-id]")) {
-      const kind = article.classList.contains("agent-tool") ? "agent-tool" :
-        article.classList.contains("agent-text") ? "agent-text" : null;
+      const kind = ["agent-tool", "agent-text", "tool-result", "request"]
+        .find((name) => article.classList.contains(name));
       if (!kind) continue;
       const segment = document.createElement("span");
       segment.className = `rail-segment ${kind}`;
@@ -514,6 +534,7 @@
     switchingTrace = true;
     const selector = $("#trace-select");
     selector.disabled = true;
+    setTraceMenuOpen(false);
     try {
       await finishEdits();
       clearTimeout(scrollSaveTimer);
@@ -536,7 +557,6 @@
       restoreScrollPosition();
       showNotice("");
     } catch (error) {
-      selector.value = traces.active;
       showNotice(error.message, true);
     } finally {
       scrollPersistenceSuspended = false;
@@ -560,7 +580,78 @@
 
   function messageHeading(entry, index) {
     const slug = state.model_slugs?.[entry.id];
-    return `${messageNumber(entry, index)}${slug ? ` · ${escapeHtml(slug)}` : ""}`;
+    const manual = entry.versions?.find((version) => version.id === entry.active_version)?.kind === "manual";
+    return `${messageNumber(entry, index)}${slug ? ` · ${escapeHtml(slug)}` : ""}${manual ? " · Manual" : ""}`;
+  }
+
+  function manualContext() {
+    const last = state.entries.at(-1);
+    const blue = last.side === "blue" ? last : state.entries.at(-2);
+    const request = JSON.parse(blue.current_text);
+    const tools = (request.tools || []).filter((tool) => tool?.type === "function" && typeof tool.name === "string");
+    const calls = last.side === "gray" ? JSON.parse(last.current_text).output.filter((item) => item?.type === "function_call") : [];
+    return {last, request, tools, calls};
+  }
+
+  function schemaTemplate(schema) {
+    if (schema?.enum?.length) return schema.enum[0];
+    if (schema?.type === "object") return Object.fromEntries((schema.required || [])
+      .map((key) => [key, schemaTemplate(schema.properties?.[key])]));
+    if (schema?.type === "array") return [];
+    if (schema?.type === "boolean") return false;
+    if (schema?.type === "integer" || schema?.type === "number") return 0;
+    return "";
+  }
+
+  function updateManualButtons() {
+    const dialog = $("#manual-dialog");
+    const parts = [...dialog.querySelectorAll(".manual-part")];
+    const context = manualContext();
+    $("#manual-add-message").disabled = parts.some((part) => part.dataset.kind === "message");
+    $("#manual-add-tool").disabled = dialog.dataset.side === "gray" ? !context.tools.length :
+      !context.calls.some((call) => !parts.some((part) => part.dataset.kind === "tool" && part.querySelector("select")?.value === call.call_id));
+  }
+
+  function addManualPart(kind) {
+    const dialog = $("#manual-dialog");
+    const context = manualContext();
+    const gray = dialog.dataset.side === "gray";
+    const part = document.createElement("div");
+    part.className = "manual-part";
+    part.dataset.kind = kind;
+    const title = kind === "message" ? (gray ? "Response" : "User message") : (gray ? "Tool call" : "Tool result");
+    const choices = kind !== "tool" ? "" : gray ?
+      `<select aria-label="Tool">${context.tools.map((tool) => `<option value="${escapeHtml(tool.name)}">${escapeHtml(tool.name)}</option>`).join("")}</select>` :
+      `<select aria-label="Tool call">${context.calls.map((call) => `<option value="${escapeHtml(call.call_id)}">${escapeHtml(call.name)} · ${escapeHtml(call.call_id)}</option>`).join("")}</select>`;
+    part.innerHTML = `<div class="manual-part-head"><span>${title}</span><button type="button" aria-label="Remove ${title.toLowerCase()}" class="manual-remove">×</button></div>${choices}<textarea spellcheck="false" aria-label="${kind === "message" ? title : gray ? "Tool arguments JSON" : "Tool result"}"></textarea>`;
+    $("#manual-parts").append(part);
+    if (kind === "tool" && gray) {
+      const tool = context.tools.find((item) => item.name === part.querySelector("select").value);
+      part.querySelector("textarea").value = JSON.stringify(schemaTemplate(tool?.parameters || {type: "object"}), null, 2);
+    }
+    if (kind === "tool" && !gray) {
+      const used = [...dialog.querySelectorAll(".manual-part[data-kind=tool] select")].slice(0, -1).map((item) => item.value);
+      part.querySelector("select").value = context.calls.find((call) => !used.includes(call.call_id))?.call_id || "";
+    }
+    updateManualButtons();
+    part.querySelector("textarea").focus();
+  }
+
+  async function openManualComposer() {
+    await finishEdits();
+    const context = manualContext();
+    if (state.auto_mode || state.busy || state.run_complete) throw Error("Pause Auto before adding a manual message.");
+    const dialog = $("#manual-dialog");
+    dialog.dataset.side = context.last.side === "blue" ? "gray" : "blue";
+    dialog.dataset.sourceId = context.last.id;
+    $("#manual-title").textContent = dialog.dataset.side === "gray" ? "Manual response" : "Manual request";
+    $("#manual-add-message").textContent = dialog.dataset.side === "gray" ? "+ Response" : "+ User message";
+    $("#manual-add-tool").textContent = dialog.dataset.side === "gray" ? "+ Tool call" : "+ Tool result";
+    $("#manual-submit").textContent = dialog.dataset.side === "gray" ? "Create response" : "Create draft";
+    $("#manual-parts").replaceChildren();
+    $("#manual-error").hidden = true;
+    updateManualButtons();
+    dialog.showModal();
   }
 
   function render() {
@@ -623,7 +714,8 @@
       ).join("")}</div>` : "";
       const cached = previewCache.get(entry.id);
       const preview = cached?.revision === entry.revision ? cached.text : desc;
-      const railKind = entry.side === "gray" ? (desc.startsWith("Tool call") ? "agent-tool" : "agent-text") : "";
+      const railKind = entry.side === "gray" ? (desc.startsWith("Tool call") ? "agent-tool" : "agent-text") :
+        desc.startsWith("Tool response") ? "tool-result" : "request";
       const message = `<article class="message ${entry.side} ${railKind} ${collapsed ? "collapsed" : ""} ${entry.id === selected ? "selected" : ""} ${editing ? "editing" : ""} ${pending ? "pending-edit" : ""}" id="m-${entry.id}" data-id="${entry.id}">
         <div class="message-head">${messageHeading(entry, index)} · ${escapeHtml(desc)}</div>
         <div class="bubble">${taps}${searchBar}<div class="collapsed-preview ${viewMode}">${escapeHtml(preview)}</div><div class="expanded-content">${viewMode === "raw" ? `<textarea class="raw-editor" spellcheck="false" aria-label="${escapeHtml(label(entry))} JSON" data-id="${entry.id}" ${editable ? "" : "readonly"}></textarea>` : `<div class="message-text ${viewMode}" data-id="${entry.id}"></div>${editors}`}</div></div>
@@ -636,11 +728,11 @@
       return message + auditor;
     }).join("") + (state.busy?.kind === "swap" || state.run_complete ? "" : state.busy?.kind === "target" ?
       `<article class="message gray pending"><div class="bubble"><span class="pending-text">Pending response from provider.</span></div></article>` :
-      last?.side === "blue" && last.status === "draft" && state.auto_generate === false && !state.pending_edit ?
-        `<article class="message gray response-add"><button type="button" data-action="approve" aria-label="Approve request and generate agent response" title="Approve request and generate agent response">+</button></article>` :
+      last?.side === "blue" && last.status === "draft" && !state.pending_edit ?
+        `<article class="message gray response-add"><div class="add-options"><button type="button" data-action="approve" aria-label="Approve request and generate AI response">+ AI</button><button type="button" data-action="manual-compose" aria-label="Create manual response">+ Manual</button></div></article>` :
       last?.side === "gray" && !state.pending_edit ?
         state.auto_generate === false && !state.draft_pending ?
-          `<article class="message blue draft-add"><button type="button" data-action="refresh-draft" aria-label="Generate next request" title="Generate next request">+</button></article>` :
+          `<article class="message blue draft-add"><div class="add-options"><button type="button" data-action="refresh-draft" aria-label="Generate AI request">+ AI</button><button type="button" data-action="manual-compose" aria-label="Create manual request">+ Manual</button></div></article>` :
         state.draft_source === "api" ?
           state.draft_pending ?
             `<article class="message blue pending"><div class="bubble"><span class="pending-text">Generating draft from API.</span></div></article>` :
@@ -956,6 +1048,9 @@
         saveError = false;
         await refresh(true, true);
         return;
+      } else if (name === "manual-compose") {
+        await openManualComposer();
+        return;
       } else if (name === "swap-model") {
         await finishEdits();
         const index = state.entries.findIndex((entry) => entry.id === id);
@@ -975,7 +1070,7 @@
         ).join("");
         $("#swap-variants").innerHTML = variantResult.variants.map((variant) => {
           const when = variant.created_at ? new Date(typeof variant.created_at === "number" ? variant.created_at * 1000 : variant.created_at).toLocaleString() : "";
-          const detail = variant.kind === "manual" ? `Manual edit of ${variant.model}` : when;
+          const detail = variant.kind === "manual" ? `Manual · ${variant.model}` : when;
           return `<label class="swap-option"><input type="radio" name="swap-variant" value="${escapeHtml(variant.id)}" ${variant.active ? "checked" : ""}><span>#${index + 1}.${variant.number} · ${escapeHtml(variant.model)}</span>${detail ? `<small>${escapeHtml(detail)}</small>` : ""}</label>`;
         }).join("");
         const dialog = $("#swap-dialog");
@@ -1033,6 +1128,7 @@
   }
 
   document.addEventListener("input", (event) => {
+    if (event.target.closest("#manual-dialog")) return;
     if (event.target.classList?.contains("message-search-input")) {
       if (!messageSearch) return;
       messageSearch.query = event.target.value;
@@ -1065,6 +1161,7 @@
     timers.set(id, setTimeout(() => saveEdit(id).catch(() => {}), 900));
   });
   document.addEventListener("blur", (event) => {
+    if (event.target.closest("#manual-dialog")) return;
     if (event.target.tagName === "TEXTAREA") saveEdit(Number(event.target.dataset.id)).catch(() => {});
   }, true);
   document.addEventListener("keydown", (event) => {
@@ -1128,6 +1225,85 @@
         await api("/api/select-message-variant", {id: Number(dialog.dataset.id), variant});
       }
       selected = Number(dialog.dataset.id);
+      dialog.close();
+      await refresh(true, true);
+    } catch (failure) {
+      error.textContent = failure.message;
+      error.hidden = false;
+    } finally { submit.disabled = false; }
+  });
+  $("#manual-cancel").addEventListener("click", () => $("#manual-dialog").close());
+  $("#manual-add-message").addEventListener("click", () => addManualPart("message"));
+  $("#manual-add-tool").addEventListener("click", () => addManualPart("tool"));
+  $("#manual-parts").addEventListener("click", (event) => {
+    if (!event.target.closest(".manual-remove")) return;
+    event.target.closest(".manual-part").remove();
+    updateManualButtons();
+  });
+  $("#manual-parts").addEventListener("change", (event) => {
+    if (event.target.tagName !== "SELECT") return;
+    const part = event.target.closest(".manual-part");
+    if ($("#manual-dialog").dataset.side === "gray") {
+      const tool = manualContext().tools.find((item) => item.name === event.target.value);
+      part.querySelector("textarea").value = JSON.stringify(schemaTemplate(tool?.parameters || {type: "object"}), null, 2);
+    }
+    updateManualButtons();
+  });
+  $("#manual-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const dialog = $("#manual-dialog");
+    const error = $("#manual-error");
+    const submit = $("#manual-submit");
+    error.hidden = true;
+    submit.disabled = true;
+    try {
+      await finishEdits();
+      const {last, request, calls} = manualContext();
+      if (last.id !== Number(dialog.dataset.sourceId) ||
+          (dialog.dataset.side === "gray" ? last.side !== "blue" || last.status !== "draft" : last.side !== "gray"))
+        throw Error("The conversation changed. Reopen the composer.");
+      const parts = [...$("#manual-parts").querySelectorAll(".manual-part")];
+      if (!parts.length) throw Error("Add a message or tool item.");
+      if (dialog.dataset.side === "gray") {
+        const output = parts.map((part) => {
+          const value = part.querySelector("textarea").value;
+          if (part.dataset.kind === "message") {
+            if (!value.trim()) throw Error("Enter response text.");
+            return {id: `msg_${crypto.randomUUID().replaceAll("-", "")}`, type: "message", role: "assistant",
+              status: "completed", content: [{type: "output_text", text: value}]};
+          }
+          let args;
+          try { args = JSON.parse(value); }
+          catch { throw Error("Tool arguments must be valid JSON."); }
+          if (!args || Array.isArray(args) || typeof args !== "object") throw Error("Tool arguments must be a JSON object.");
+          return {id: `fc_${crypto.randomUUID().replaceAll("-", "")}`, type: "function_call",
+            name: part.querySelector("select").value, status: "completed",
+            call_id: `call_${crypto.randomUUID().replaceAll("-", "")}`, arguments: JSON.stringify(args)};
+        });
+        const response = {id: `resp_manual_${crypto.randomUUID().replaceAll("-", "")}`,
+          object: "response", model: request.model, status: "completed", output};
+        if (request.access_programs) response.access_programs = structuredClone(request.access_programs);
+        await api("/api/manual-response", {id: last.id, response});
+      } else {
+        const prior = JSON.parse(state.entries.at(-2).current_text);
+        const response = JSON.parse(last.current_text);
+        const draft = structuredClone(prior);
+        draft.input = [...prior.input, ...response.output.filter((item) => !last.revision || item.type !== "reasoning")];
+        const used = new Set();
+        for (const part of parts) {
+          const value = part.querySelector("textarea").value;
+          if (part.dataset.kind === "message") {
+            if (!value.trim()) throw Error("Enter user message text.");
+            draft.input.push({role: "user", content: value});
+          } else {
+            const callId = part.querySelector("select").value;
+            if (!calls.some((call) => call.call_id === callId) || used.has(callId)) throw Error("Choose each tool call once.");
+            used.add(callId);
+            draft.input.push({type: "function_call_output", call_id: callId, output: value});
+          }
+        }
+        await api("/api/manual-draft", {request: draft});
+      }
       dialog.close();
       await refresh(true, true);
     } catch (failure) {
@@ -1252,16 +1428,63 @@
       settingsButton.focus();
     }
   });
-  $("#trace-select").addEventListener("change", (event) => selectTrace(event.target.value));
-  $("#trace-rename").addEventListener("click", async () => {
-    if (!traces || switchingTrace) return;
-    const current = traces.traces.find((trace) => trace.id === traces.active);
-    const name = prompt("Trace name", current?.name || "");
-    if (name === null || name.trim() === current?.name) return;
+  $("#trace-select").addEventListener("click", () => setTraceMenuOpen($("#trace-menu").hidden));
+  $("#trace-menu").addEventListener("click", (event) => {
+    const rename = event.target.closest(".trace-row-rename");
+    if (rename) {
+      setTraceMenuOpen(false);
+      traceRenameId = rename.closest(".trace-row")?.querySelector(".trace-choice")?.dataset.traceId;
+      const current = traces?.traces.find((trace) => trace.id === traceRenameId);
+      if (!current || switchingTrace) return;
+      $("#trace-rename-input").value = current.name;
+      $("#trace-rename-error").hidden = true;
+      $("#trace-rename-dialog").showModal();
+      $("#trace-rename-input").focus();
+      $("#trace-rename-input").select();
+      return;
+    }
+    const choice = event.target.closest(".trace-choice");
+    if (choice) {
+      setTraceMenuOpen(false);
+      selectTrace(choice.dataset.traceId);
+    }
+  });
+  document.addEventListener("pointerdown", (event) => {
+    if (!$("#trace-menu").hidden && !event.target.closest(".trace-picker")) setTraceMenuOpen(false);
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && !$("#trace-menu").hidden) {
+      setTraceMenuOpen(false);
+      $("#trace-select").focus();
+    }
+  });
+  $("#trace-rename-cancel").addEventListener("click", () => $("#trace-rename-dialog").close());
+  $("#trace-rename-dialog").addEventListener("close", () => { traceRenameId = null; });
+  $("#trace-rename-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const input = $("#trace-rename-input");
+    const name = input.value.trim();
+    const current = traces?.traces.find((trace) => trace.id === traceRenameId);
+    if (!current || switchingTrace) return;
+    if (name === current.name) {
+      $("#trace-rename-dialog").close();
+      return;
+    }
+    const error = $("#trace-rename-error");
+    const save = $("#trace-rename-save");
+    save.disabled = true;
+    error.hidden = true;
     try {
-      await api("/api/rename-trace", {name});
+      await finishEdits();
+      await api("/api/rename-trace", {id: traceRenameId, name});
       await loadTraces();
-    } catch (error) { showNotice(error.message, true); }
+      $("#trace-rename-dialog").close();
+    } catch (failure) {
+      error.textContent = failure.message;
+      error.hidden = false;
+    } finally {
+      save.disabled = false;
+    }
   });
   $("#view-mode").addEventListener("click", (event) => {
     const choice = event.target.closest("[data-view]");

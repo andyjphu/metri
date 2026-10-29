@@ -786,6 +786,40 @@ def validate_target(value):
         raise ValueError("Function calls need unique call_id values.")
 
 
+def validate_manual_response(value, request):
+    validate_target(value)
+    if not value["output"] or value.get("model") != request["model"]:
+        raise ValueError("The manual response needs output and must use the request's model.")
+    tools = {item.get("name") for item in request.get("tools", [])
+             if isinstance(item, dict) and item.get("type") == "function"}
+    messages = 0
+    for item in value["output"]:
+        if not isinstance(item, dict):
+            raise ValueError("Each manual output item must be an object.")
+        if item.get("type") == "message":
+            messages += 1
+            content = item.get("content")
+            if (item.get("role") != "assistant" or not isinstance(content, list)
+                    or not content or any(not isinstance(part, dict)
+                        or part.get("type") != "output_text" or not isinstance(part.get("text"), str)
+                        for part in content)):
+                raise ValueError("A manual message needs assistant output text.")
+        elif item.get("type") == "function_call":
+            if (item.get("name") not in tools or not isinstance(item.get("call_id"), str)
+                    or not item["call_id"] or not isinstance(item.get("arguments"), str)):
+                raise ValueError("A manual tool call needs an available tool, call ID, and JSON arguments.")
+            try:
+                arguments = json.loads(item["arguments"])
+            except ValueError as exc:
+                raise ValueError("Tool arguments must be valid JSON.") from exc
+            if not isinstance(arguments, dict):
+                raise ValueError("Tool arguments must be a JSON object.")
+        else:
+            raise ValueError("Manual output supports assistant messages and tool calls.")
+    if messages > 1:
+        raise ValueError("A manual response can contain one assistant message.")
+
+
 def replay_output(target):
     """Edited visible output must not carry opaque reasoning from the original turn."""
     output = parsed(target)["output"]
@@ -1348,10 +1382,13 @@ class Handler(BaseHTTPRequestHandler):
                     if not isinstance(name, str) or not name.strip() or len(name) > 160 or "\n" in name:
                         raise ValueError("Trace name must be a single line of 1 to 160 characters.")
                     catalog = load_traces()
-                    trace = next(item for item in catalog["traces"] if item["id"] == catalog["active"])
+                    trace_id = data.get("id", catalog["active"])
+                    trace = next((item for item in catalog["traces"] if item["id"] == trace_id), None)
+                    if trace is None:
+                        raise ValueError("Unknown trace.")
                     trace["name"] = name.strip()
                     save_traces(catalog)
-                    sync_active_experiment_card(state, catalog)
+                    sync_all_experiment_cards()
                     event("trace_renamed", trace_id=trace["id"], name=trace["name"])
                     self.send(200, catalog)
                     return
@@ -1531,6 +1568,31 @@ class Handler(BaseHTTPRequestHandler):
                     threading.Thread(target=run_approved, args=(entry["id"],), daemon=True).start()
                     self.send(202, {"ok": True})
                     return
+                if path == "/api/manual-response":
+                    if state["run_complete"] or state["auto_mode"] or state["busy"]:
+                        raise ValueError("Pause Auto and wait for the current response.")
+                    entry = current_entry(state, int(data["id"]))
+                    if entry != state["entries"][-1] or entry["side"] != "blue" or entry["status"] != "draft":
+                        raise ValueError("A manual response needs the latest blue draft.")
+                    request = parsed(entry)
+                    validate_request(request)
+                    response = data.get("response")
+                    validate_manual_response(response, request)
+                    entry["status"] = "simulated"
+                    target = make_entry(state, "gray", response, "received")
+                    target["versions"] = []
+                    append_version(target, target["current_text"], "manual")
+                    state["draft_generation"] += 1
+                    state["draft_pending"] = False
+                    state["draft_error"] = None
+                    state["auditor_exchange"] = []
+                    state["error"] = None
+                    save_state(state)
+                    event("manual_response_created", request_entry_id=entry["id"],
+                          response_entry_id=target["id"], exact_response=response)
+                    self.send(200, {"entry": target})
+                    queue_next_draft(state, "manual response")
+                    return
                 if path == "/api/refresh-draft":
                     entry = current_entry(state, int(data["id"]))
                     if entry != state["entries"][-1]:
@@ -1588,7 +1650,9 @@ class Handler(BaseHTTPRequestHandler):
                     if target["side"] == "gray" and data.get("notify", True) is not False:
                         queue_next_draft(state, "rewound to gray response")
                     return
-                if path == "/api/codex-draft":
+                if path in {"/api/codex-draft", "/api/manual-draft"}:
+                    if path == "/api/manual-draft" and (state["auto_mode"] or state["busy"] or state["run_complete"]):
+                        raise ValueError("Pause Auto and wait before creating a manual draft.")
                     target = state["entries"][-1]
                     if target["side"] != "gray":
                         raise ValueError("A gray target bubble must be latest before drafting.")
@@ -1599,13 +1663,18 @@ class Handler(BaseHTTPRequestHandler):
                     if value["input"][:len(expected)] != expected:
                         raise ValueError("Draft must replay the approved request and current agent response.")
                     draft = make_entry(state, "blue", value, "draft")
+                    if path == "/api/manual-draft":
+                        ensure_versions(state, load_traces()["active"], draft)
+                        active = next(item for item in draft["versions"] if item["id"] == draft["active_version"])
+                        active["kind"] = "manual"
                     state["draft_generation"] += 1
                     state["draft_pending"] = False
                     state["draft_error"] = None
                     state["auditor_exchange"] = []
                     state["error"] = None
                     save_state(state)
-                    event("codex_draft_created", target_id=target["id"], entry_id=draft["id"], exact_request=value)
+                    event("manual_draft_created" if path == "/api/manual-draft" else "codex_draft_created",
+                          target_id=target["id"], entry_id=draft["id"], exact_request=value)
                     self.send(200, {"entry": draft})
                     return
                 if path == "/api/auditor-answer":

@@ -231,6 +231,53 @@ class MetriTest(unittest.TestCase):
         state["entries"][1]["current_text"] = json.dumps({"output": []})
         self.assertEqual(server.model_slugs(state)["2"], "gpt-6-sol-daybreak")
 
+    def test_manual_gray_and_blue_do_not_call_a_provider(self):
+        self.post("auto-generate", {"enabled": False})
+        first = json.loads(self.get()["entries"][0]["current_text"])
+        first["input"][0]["content"] = "Find the file"
+        first["tools"] = [{"type": "function", "name": "Glob", "parameters": {
+            "type": "object", "properties": {"pattern": {"type": "string"}}, "required": ["pattern"]}}]
+        self.post("edit", {"id": 1, "text": json.dumps(first)})
+        output = [
+            {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "I will look."}]},
+            {"type": "function_call", "name": "Glob", "call_id": "call_manual_one", "arguments": '{"pattern":"*.md"}'},
+            {"type": "function_call", "name": "Glob", "call_id": "call_manual_two", "arguments": '{"pattern":"*.txt"}'},
+        ]
+        response = {"id": "resp_manual_test", "object": "response", "model": first["model"],
+                    "status": "completed", "output": output}
+        created = self.post("manual-response", {"id": 1, "response": response})["entry"]
+        self.assertEqual(created["side"], "gray")
+        self.assertEqual(created["versions"][0]["kind"], "manual")
+        self.assertEqual(self.get()["entries"][0]["status"], "simulated")
+        self.assertEqual(self.target_requests, [])
+        self.assertEqual(json.loads(created["current_text"])["output"], output)
+        draft = copy.deepcopy(first)
+        draft["input"] += output + [
+            {"type": "function_call_output", "call_id": "call_manual_one", "output": "report.md"},
+            {"type": "function_call_output", "call_id": "call_manual_two", "output": "notes.txt"},
+        ]
+        next_entry = self.post("manual-draft", {"request": draft})["entry"]
+        self.assertEqual(next_entry["side"], "blue")
+        self.assertEqual(next_entry["status"], "draft")
+        self.assertEqual(next_entry["versions"][0]["kind"], "manual")
+        self.assertEqual(self.target_requests, [])
+        events = [json.loads(line)["kind"] for line in server.EVENTS_FILE.read_text().splitlines()]
+        self.assertIn("manual_response_created", events)
+        self.assertIn("manual_draft_created", events)
+
+    def test_manual_response_rejects_unavailable_tools(self):
+        first = json.loads(self.get()["entries"][0]["current_text"])
+        first["input"][0]["content"] = "Run a test"
+        self.post("edit", {"id": 1, "text": json.dumps(first)})
+        response = {"model": first["model"], "output": [
+            {"type": "function_call", "name": "Bash", "call_id": "call_1", "arguments": "{}"}]}
+        with self.assertRaises(urllib.error.HTTPError) as error:
+            self.post("manual-response", {"id": 1, "response": response})
+        self.assertEqual(error.exception.code, 400)
+        error.exception.close()
+        self.assertEqual(len(self.get()["entries"]), 1)
+        self.assertEqual(self.target_requests, [])
+
     def test_configured_openrouter_default_routes_target_requests(self):
         seen = []
         def fake_openrouter(request, timeout):
@@ -295,6 +342,11 @@ class MetriTest(unittest.TestCase):
         catalog = self.get_traces()
         catalog["traces"].append({"id": "archive", "name": "~/metri/archive"})
         server.save_traces(catalog)
+
+        self.post("rename-trace", {"id": "archive", "name": "~/metri/renamed-archive"})
+        self.assertEqual(self.get_traces()["active"], "current")
+        self.assertEqual(self.get_traces()["traces"][1]["name"], "~/metri/renamed-archive")
+        self.assertIn("# ~/metri/renamed-archive", (directory / "EXPERIMENT_CARD.md").read_text())
 
         self.post("select-trace", {"id": "archive"})
         self.assertEqual(self.get_traces()["active"], "archive")
