@@ -418,14 +418,18 @@
     const track = $("#rail-track");
     const scale = track.clientHeight / Math.max(scroller.scrollHeight, 1);
     const segments = document.createDocumentFragment();
-    for (const article of scroller.querySelectorAll(".message[data-id]")) {
+    const articles = [...scroller.querySelectorAll(".message[data-id]")];
+    for (const [index, article] of articles.entries()) {
       const kind = ["agent-tool", "agent-text", "tool-result", "request"]
         .find((name) => article.classList.contains(name));
       if (!kind) continue;
       const segment = document.createElement("span");
       segment.className = `rail-segment ${kind}`;
-      segment.style.top = `${railY(article, scroller) * scale}px`;
-      segment.style.height = `${article.getBoundingClientRect().height * scale}px`;
+      const start = railY(article, scroller);
+      const end = index + 1 < articles.length ? railY(articles[index + 1], scroller) :
+        start + article.getBoundingClientRect().height;
+      segment.style.top = `${start * scale}px`;
+      segment.style.height = `${Math.max(1, (end - start) * scale)}px`;
       segments.append(segment);
     }
     $("#rail-segments").replaceChildren(segments);

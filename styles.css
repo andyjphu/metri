@@ -81,11 +81,11 @@ button { cursor: pointer; }
 .rail-track { position: relative; width: 14px; height: 100%; cursor: pointer; }
 .rail-track::before { content: ""; position: absolute; top: 0; bottom: 0; left: 5px; width: 1px; background: #bdbdbd; }
 .rail-segment { position: absolute; left: 5px; width: 1px; }
-.rail-segment.agent-text { background: #af52de; opacity: .42; }
-.rail-segment.agent-tool { background: #ff9500; opacity: .42; }
-.rail-segment.tool-result { background: #30b0c7; opacity: .5; }
-.rail-segment.request { background: #34c759; opacity: .45; }
-.rail-thumb { position: absolute; left: 4.5px; width: 2px; background: #757575; pointer-events: none; }
+.rail-segment.agent-text { background: #af52de; }
+.rail-segment.agent-tool { background: #ff9500; }
+.rail-segment.tool-result { background: #00a7b8; }
+.rail-segment.request { background: #34c759; }
+.rail-thumb { position: absolute; left: 8px; width: 1px; background: #757575; pointer-events: none; }
 .rail-point { position: absolute; left: 0; display: block; width: 14px; height: 14px; padding: 0; transform: translateY(-50%); border: 0; border-radius: 50%; background: transparent; }
 .rail-point::before { content: "•"; position: absolute; top: 2px; left: 4px; height: 9px; color: #616161; background: #fff; font-size: 9px; line-height: 9px; }
 .rail-point:hover::before, .rail-point:focus-visible::before { color: #1c1c1e; }
@@ -100,7 +100,7 @@ button { cursor: pointer; }
 .message.blue .message-head { text-align: left; }
 .draft-add { display: flex; justify-content: flex-end; }
 .response-add { display: flex; justify-content: flex-start; }
-.add-options { display: flex; gap: 8px; }
+.add-options { position: relative; z-index: 1; display: flex; gap: 8px; }
 .add-options button { min-height: 34px; padding: 6px 12px; border: 1px dashed #c8c8cf; border-radius: 17px; background: #fff; color: #55555a; font-size: 12px; }
 .add-options button:hover { background: #f0f0f4; }
 .add-options button:focus-visible { outline: 2px solid #80b5fb; outline-offset: 2px; }
