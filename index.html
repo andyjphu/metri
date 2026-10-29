@@ -10,8 +10,6 @@
   <main class="app">
     <header class="topbar">
       <div class="status-line">
-        <span id="status-model" class="status-indicator"></span>
-        <span id="status-program" class="status-indicator"></span>
         <span id="save-status" class="status-indicator save-status" role="status" aria-live="polite"></span>
       </div>
       <div class="trace-picker">
@@ -30,6 +28,10 @@
             <label class="settings-row topbar-switch"><span>Auto-approve</span><input id="auto-mode" type="checkbox" role="switch" aria-label="Auto-approve"></label>
             <label class="settings-row topbar-switch"><span>Auto-generate</span><input id="auto-generate" type="checkbox" role="switch" aria-label="Auto-generate blue drafts"></label>
             <label class="settings-row topbar-switch settings-divider"><span>Collapse all</span><input id="collapse-all" type="checkbox" role="switch" aria-label="Collapse all bubbles"></label>
+            <div class="settings-info">
+              <div class="settings-row"><span>Model</span><span id="status-model" class="settings-value"></span></div>
+              <div id="status-program-row" class="settings-row" hidden><span>Access</span><span id="status-program" class="settings-value"></span></div>
+            </div>
           </div>
         </div>
       </div>
@@ -56,10 +58,9 @@
   <dialog id="swap-dialog" class="swap-dialog" aria-labelledby="swap-title">
     <form id="swap-form">
       <div id="swap-title" class="swap-title">Replace response</div>
-      <div id="swap-detail" class="swap-detail"></div>
       <div id="swap-existing">
         <div id="swap-variants" class="swap-options" role="radiogroup" aria-label="Generated responses"></div>
-        <button id="swap-new" class="swap-new" type="button"><span aria-hidden="true">+</span> New response</button>
+        <button id="swap-new" class="swap-new" type="button"><span aria-hidden="true">+</span>New response</button>
       </div>
       <div id="swap-generate" hidden>
         <button id="swap-back" class="swap-back" type="button">‹ Responses</button>

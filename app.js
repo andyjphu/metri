@@ -283,8 +283,9 @@
     const model = typeof request?.model === "string" ? request.model : "";
     const program = typeof request?.access_programs?.cyber === "string" ? request.access_programs.cyber : "";
     $("#status-model").textContent = model;
+    $("#status-model").title = model;
     $("#status-program").textContent = program ? `${program}: enabled` : "";
-    $("#status-program").hidden = !program;
+    $("#status-program-row").hidden = !program;
   }
 
   function updateAutoMode() {
@@ -924,9 +925,8 @@
         ).join("");
         $("#swap-variants").innerHTML = variantResult.variants.map((variant) => {
           const when = variant.created_at ? new Date(variant.created_at * 1000).toLocaleString() : "";
-          return `<label class="swap-option"><input type="radio" name="swap-variant" value="${escapeHtml(variant.id)}" ${variant.active ? "checked" : ""}><span>${variant.active ? "Current" : "Earlier"} · ${escapeHtml(variant.model)}</span>${when ? `<small>${escapeHtml(when)}</small>` : ""}</label>`;
+          return `<label class="swap-option"><input type="radio" name="swap-variant" value="${escapeHtml(variant.id)}" ${variant.active ? "checked" : ""}><span>${escapeHtml(variant.model)}</span>${when ? `<small>${escapeHtml(when)}</small>` : ""}</label>`;
         }).join("");
-        const later = state.entries.length - index - 1;
         const dialog = $("#swap-dialog");
         dialog.dataset.id = id;
         dialog.dataset.mode = "existing";
@@ -935,10 +935,8 @@
         $("#swap-generate").hidden = true;
         $("#swap-submit").textContent = "Use response";
         $("#swap-submit").disabled = true;
-        $("#swap-detail").textContent = later ? `Later ${later} bubble${later === 1 ? "" : "s"} will be archived and removed.` : `Gray #${id} will be replaced.`;
         $("#swap-error").hidden = true;
         dialog.showModal();
-        $("#swap-new").focus();
         return;
       } else if (name === "rewind") {
         const index = state.entries.findIndex((entry) => entry.id === id);
@@ -1061,7 +1059,7 @@
     $("#swap-generate").hidden = true;
     $("#swap-submit").textContent = "Use response";
     $("#swap-submit").disabled = $("#swap-variants input:checked")?.value === "active";
-    $("#swap-new").focus();
+    $("#swap-variants input:checked")?.focus();
   });
   $("#swap-variants").addEventListener("change", () => {
     $("#swap-submit").disabled = $("#swap-variants input:checked")?.value === "active";

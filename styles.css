@@ -27,8 +27,12 @@ button { cursor: pointer; }
 .settings-panel { position: absolute; z-index: 20; top: calc(100% + 10px); right: 0; width: 260px; padding: 8px 12px; border: 1px solid #d5d5d9; border-radius: 16px; background: #fff; box-shadow: 0 12px 32px #0000001f; color: var(--ink); }
 .settings-panel[hidden] { display: none; }
 .settings-row { display: flex; justify-content: space-between; align-items: center; min-height: 42px; gap: 14px; font-size: 13px; color: var(--ink); }
+.settings-row[hidden] { display: none; }
 .settings-row input:focus-visible, .settings-row button:focus-visible { outline: 2px solid #80b5fb; outline-offset: 2px; }
 .settings-divider { margin-top: 4px; border-top: 1px solid #eeeef0; }
+.settings-info { margin-top: 4px; border-top: 1px solid #eeeef0; }
+.settings-info .settings-row { min-height: 32px; color: #77777c; font-size: 12px; }
+.settings-value { max-width: 172px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #55555a; text-align: right; }
 .topbar-switch { display: flex; align-items: center; gap: 6px; color: #55555a; font-size: 12px; white-space: nowrap; cursor: pointer; }
 .topbar-switch input { appearance: none; width: 30px; height: 18px; margin: 0; border-radius: 9px; background: #d3d3d7; position: relative; cursor: pointer; }
 .topbar-switch input::after { content: ""; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px #0003; transition: transform .15s ease; }
@@ -140,17 +144,18 @@ mark.message-search-hit.current { outline: 2px solid #ff9500; }
 .swap-dialog { width: min(390px, calc(100vw - 32px)); padding: 20px; border: 1px solid #d5d5d9; border-radius: 19px; background: #fff; color: var(--ink); box-shadow: 0 16px 48px #0003; }
 .swap-dialog::backdrop { background: #0002; }
 .swap-title { font-size: 16px; font-weight: 600; }
-.swap-detail { margin: 5px 0 18px; color: #66666b; font-size: 12px; }
 .swap-options { display: grid; gap: 8px; }
+#swap-variants { margin-top: 16px; }
 .swap-option { display: block; position: relative; padding: 10px 12px; border: 1px solid #d5d5d9; border-radius: 12px; background: #f8f8fa; color: var(--ink); font-size: 12px; cursor: pointer; }
 .swap-option:hover { background: #f0f0f4; }
 .swap-option:has(input:checked) { border-color: #7fb5fb; background: #edf5ff; }
 .swap-option:focus-within { outline: 2px solid #80b5fb; outline-offset: 2px; }
+.swap-option:has(input:checked):focus-within { outline: none; }
 .swap-option input { position: absolute; width: 1px; height: 1px; opacity: 0; }
 .swap-option small { display: block; margin-top: 2px; color: #77777c; font-size: 11px; }
-.swap-new { width: 100%; margin-top: 8px; padding: 9px 12px; border: 1px solid #d5d5d9; border-radius: 12px; background: #fff; color: var(--ink); text-align: left; font-size: 12px; }
+.swap-new { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 48px; margin-top: 8px; padding: 10px 12px; border: 1px dashed #c8c8cf; border-radius: 12px; background: #fbfbfc; color: #55555a; text-align: left; font-size: 12px; }
 .swap-new:hover, .swap-back:hover { background: #f0f0f4; }
-.swap-new span { display: inline-grid; place-items: center; width: 18px; height: 18px; margin-right: 5px; border-radius: 50%; background: #eeeef2; font-size: 16px; line-height: 1; }
+.swap-new span { display: inline-block; width: 16px; color: inherit; font-size: 19px; font-weight: 300; line-height: 1; text-align: center; }
 .swap-back { margin: -4px 0 12px; padding: 5px 7px; border: 0; border-radius: 8px; background: transparent; color: #55555a; font-size: 12px; }
 .swap-error { margin-top: 8px; color: #b3261e; font-size: 12px; }
 .swap-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px; }
