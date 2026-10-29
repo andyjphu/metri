@@ -292,6 +292,9 @@ class ReviewRoomTest(unittest.TestCase):
         self.assertEqual(state["draft_source"], "api")
         self.assertFalse(state["draft_pending"])
         self.assertEqual(len(state["entries"]), 3)
+        auditor_request = next(item for item in calls if item["instructions"].startswith("You draft"))
+        self.assertEqual(json.loads(auditor_request["input"][0]["content"])["send_mode"],
+                         "manual with human approval")
         self.assertEqual(len([item for item in calls if item["instructions"] == "Test instructions"]), 1)
         draft = json.loads(state["entries"][-1]["current_text"])
         self.assertEqual(draft["input"][-1]["output"], '{"ok":true}')
