@@ -105,6 +105,10 @@ def request_from_events(path):
     return None
 
 
+def blank_request():
+    return {"model": "", "instructions": "", "input": [{"role": "user", "content": ""}], "store": False}
+
+
 def default_request():
     """Recover experiment details from logs, then the card; otherwise leave them blank."""
     from_events = request_from_events(EVENTS_FILE)
@@ -117,7 +121,7 @@ def default_request():
     from_card = request_from_card(DATA / "EXPERIMENT_CARD.md")
     if from_card:
         return from_card
-    return {"model": "", "instructions": "", "input": [{"role": "user", "content": ""}], "store": False}
+    return blank_request()
 
 
 def make_entry(state, side, value, status):
@@ -609,6 +613,28 @@ class Handler(BaseHTTPRequestHandler):
                         save_traces(catalog)
                         sync_active_experiment_card(load_state(), catalog)
                         event("trace_selected", from_id=previous, to_id=trace_id)
+                    self.send(200, catalog)
+                    return
+                if path == "/api/new-trace":
+                    trace_id = data.get("id")
+                    name = data.get("name")
+                    if not isinstance(trace_id, str) or not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,63}", trace_id):
+                        raise ValueError("Trace id must use lowercase letters, numbers, hyphens, or underscores.")
+                    if not isinstance(name, str) or not name.strip() or len(name) > 160 or "\n" in name:
+                        raise ValueError("Trace name must be a single line of 1 to 160 characters.")
+                    catalog = load_traces()
+                    if trace_id in {item["id"] for item in catalog["traces"]} or (DATA / "traces" / trace_id).exists():
+                        raise ValueError("A trace with that id already exists.")
+                    snapshot_active_trace(catalog)
+                    fresh = {"version": 1, "next_id": 1, "entries": [], "busy": None, "error": None,
+                             "auto_mode": False, "run_complete": False}
+                    make_entry(fresh, "blue", blank_request(), "draft")
+                    catalog["traces"].append({"id": trace_id, "name": name.strip()})
+                    catalog["active"] = trace_id
+                    save_traces(catalog)
+                    EVENTS_FILE.write_text("")
+                    save_state(fresh)
+                    event("trace_created", trace_id=trace_id, name=name.strip())
                     self.send(200, catalog)
                     return
                 if path == "/api/edit":

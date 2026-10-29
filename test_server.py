@@ -147,6 +147,27 @@ class ReviewRoomTest(unittest.TestCase):
         restored = server.load_state()
         self.assertEqual(json.loads(restored["entries"][0]["current_text"])["model"], "snapshot-model")
 
+    def test_new_trace_starts_blank_without_inheriting_prior_model(self):
+        old = self.get()
+        old_request = json.loads(old["entries"][0]["current_text"])
+        self.assertEqual(old_request["model"], "test-model")
+        self.post("new-trace", {"id": "fresh-e111", "name": "~/better-petri/E111"})
+        self.assertEqual(self.get_traces()["active"], "fresh-e111")
+        fresh = self.get()
+        request = json.loads(fresh["entries"][0]["current_text"])
+        self.assertEqual(request["model"], "")
+        self.assertNotIn("access_programs", request)
+        self.assertNotIn("tools", request)
+        self.assertEqual(len(fresh["entries"]), 1)
+        self.assertTrue((server.DATA / "traces" / "current" / "session.json").is_file())
+        self.assertEqual(self.target_requests, [])
+        with self.assertRaises(urllib.error.HTTPError) as error:
+            self.post("new-trace", {"id": "fresh-e111", "name": "duplicate"})
+        self.assertEqual(error.exception.code, 400)
+        error.exception.close()
+        self.post("select-trace", {"id": "current"})
+        self.assertEqual(json.loads(self.get()["entries"][0]["current_text"])["model"], "test-model")
+
     def test_no_target_call_until_exact_request_approved_and_edits_replayed(self):
         state = self.get()
         self.assertEqual(len(self.target_requests), 0)

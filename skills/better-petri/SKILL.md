@@ -9,6 +9,8 @@ Locate the `review_room/` directory containing `server.py` in the working reposi
 
 `GET /api/traces` names the available traces and identifies the active one. The active trace alone is mirrored in `data/session.json` and `data/events.jsonl`. Switching through `POST /api/select-trace` saves the active trace under `data/traces/<id>/` and restores the selected trace. Read the active trace name before drafting, and do not silently switch traces for a queued draft notification. `POST /api/rename-trace` changes the active trace's display name.
 
+For a new experiment, `POST /api/new-trace` with a unique lowercase `id` and a `name` creates a blank linear trace, archives the current active trace, and switches to the new one. It does not inherit the prior experiment's model or settings and does not call the target. Fill the first blue request from the experiment's actual configuration.
+
 Each trace has an `EXPERIMENT_CARD.md` beside its logs; the active copy is `data/EXPERIMENT_CARD.md`. The server copies the system prompt and all non-`input` request settings from message #1 and keeps them current after edits. At the start of an experiment, add a concise AI-authored setup note through `POST /api/experiment-note` with `{"note":"...","references":[{"label":"...","path":"repo/relative/file.md"}]}`. Describe the actual local implementation and link supporting documents; distinguish the planned environment from any executed-run difference. The card is auditor-side documentation and is never part of a target request.
 
 ## Send mode, an agent setting
