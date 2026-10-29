@@ -429,7 +429,9 @@
       `<article class="message gray pending"><div class="bubble"><span class="pending-text">Pending response from provider.</span></div></article>` :
       last?.side === "gray" ?
         state.draft_source === "api" ?
-          `<article class="message blue pending"><div class="bubble"><span class="${state.draft_pending ? "pending-text" : ""}">${escapeHtml(state.draft_error || (state.draft_pending ? "Generating draft from API." : "No API draft pending."))}</span></div></article>` :
+          state.draft_pending ?
+            `<article class="message blue pending"><div class="bubble"><span class="pending-text">Generating draft from API.</span></div></article>` :
+            `<div class="auditor-note">${escapeHtml(state.auditor_exchange?.at(-1)?.answer === null ? `Question to auditor: ${state.auditor_exchange.at(-1).question}` : state.draft_error || "No API draft pending.")}</div>` :
           `<article class="message blue pending"><div class="bubble"><span class="pending-text">Pending a response from your agent.</span><p class="pending-advice">If it stalls, send: “Read review_room/data/session.json and POST a full draft to /api/codex-draft. Do not call the target.”</p></div></article>` : "");
     entries.forEach((entry) => {
       if (isCollapsed(entry)) return;
@@ -469,7 +471,7 @@
     try {
       const response = await fetch(stateUrl, {cache: "no-store"});
       const next = await response.json();
-      const signature = JSON.stringify(next.entries.map((e) => [e.id, e.revision, e.status])) + JSON.stringify(next.busy) + next.error + next.auto_mode + next.run_complete + next.draft_source + next.draft_pending + next.draft_error;
+      const signature = JSON.stringify(next.entries.map((e) => [e.id, e.revision, e.status])) + JSON.stringify(next.busy) + next.error + next.auto_mode + next.run_complete + next.draft_source + next.draft_pending + next.draft_error + JSON.stringify(next.auditor_exchange);
       state = next;
       updateAutoMode();
       updateDraftSource();

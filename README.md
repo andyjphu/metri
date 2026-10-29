@@ -22,7 +22,7 @@ The save indicator shows the time since the local session was saved, rounded to 
 
 Use Raw for editable JSON or Rendered for message text with line breaks and other whitespace displayed. Rendered shows each tool call and result in its own labeled section and leaves Markdown markers as text. Tap the pencil to edit message or tool fields in Rendered. The browser remembers the selected view and scroll position on reload. The old Cleaned view is hidden, retained in code for now, and considered for deprecation; it will receive no future updates.
 
-The first request has an empty task. Add one before approving it. API on generates blue drafts through a model call; API off queues this Codex session. Both leave sending behind ✓. Set `BETTER_PETRI_DRAFT_MODEL` to choose the drafting model; otherwise the trace's model is used.
+The first request has an empty task. Add one before approving it. API on generates blue drafts through a model call; API off queues this Codex session. Both leave sending behind ✓. If the API drafter lacks a tool result, it can ask the Codex auditor and resume after an answer. Set `BETTER_PETRI_DRAFT_MODEL` to choose the drafting model; otherwise the trace's model is used.
 
 The server binds to `127.0.0.1`. It reads `OPENAI_API_KEY` from the environment or local Codex auth. The key stays out of the page and saved JSON. Edits and approvals are recorded in `data/events.jsonl`; the active trace is in `data/session.json`. Other traces are kept locally under `data/traces/`.
 

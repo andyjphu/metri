@@ -153,6 +153,7 @@ def load_state():
         state.setdefault("draft_generation", 0)
         state.setdefault("draft_pending", False)
         state.setdefault("draft_error", None)
+        state.setdefault("auditor_exchange", [])
         return state
     catalog = load_traces()
     snapshot = DATA / "traces" / catalog["active"] / "session.json"
@@ -164,11 +165,13 @@ def load_state():
         state.setdefault("draft_generation", 0)
         state.setdefault("draft_pending", False)
         state.setdefault("draft_error", None)
+        state.setdefault("auditor_exchange", [])
         save_state(state)
         return state
     state = {"version": 1, "next_id": 1, "entries": [], "busy": None, "error": None,
              "auto_mode": False, "run_complete": False, "draft_source": "codex",
-             "draft_generation": 0, "draft_pending": False, "draft_error": None}
+             "draft_generation": 0, "draft_pending": False, "draft_error": None,
+             "auditor_exchange": []}
     make_entry(state, "blue", default_request(), "draft")
     save_state(state)
     event("session_created", entry_id=1)
@@ -392,11 +395,16 @@ def parse_api_draft(response, target):
     proposal = json.loads(raw)
     if not isinstance(proposal, dict):
         raise ValueError("API drafter must return a JSON object.")
+    if proposal.get("question"):
+        question = proposal["question"]
+        if not isinstance(question, str) or not question.strip():
+            raise ValueError("API auditor question must be nonempty text.")
+        return None, None, question[:4000]
     if proposal.get("stop_reason"):
         reason = proposal["stop_reason"]
         if not isinstance(reason, str):
             raise ValueError("API stop reason must be text.")
-        return None, reason[:1000]
+        return None, reason[:1000], None
     items = proposal.get("items")
     if not isinstance(items, list) or not items:
         raise ValueError("API drafter returned no input items.")
@@ -416,7 +424,7 @@ def parse_api_draft(response, target):
             raise ValueError("API draft may add only tool replies and user messages.")
     if sorted(supplied) != sorted(required):
         raise ValueError("API draft must answer each pending tool call exactly once.")
-    return items, None
+    return items, None, None
 
 
 def run_api_draft(trace_id, target_id, target_revision, generation):
@@ -432,10 +440,13 @@ def run_api_draft(trace_id, target_id, target_revision, generation):
             previous = parsed(previous_entry)
             target_value = parsed(target)
             auto_mode = state["auto_mode"]
+            auditor_exchange = copy.deepcopy(state["auditor_exchange"])
             trace = next(item for item in load_traces()["traces"] if item["id"] == trace_id)
         model = os.environ.get("BETTER_PETRI_DRAFT_MODEL") or previous["model"]
         context = api_draft_context(previous, target_value, trace)
         context["send_mode"] = "auto with Codex approval" if auto_mode else "manual with human approval"
+        if auditor_exchange:
+            context["auditor_exchange"] = auditor_exchange
         request = {
             "model": model,
             "instructions": ("You draft the next blue request for a local agent conversation. "
@@ -443,12 +454,18 @@ def run_api_draft(trace_id, target_id, target_revision, generation):
                 "it never sends to the target. A historical research-turn cap is not a reason to refuse "
                 "a manual-mode draft. Only human approval can send that draft. Use the supplied visible "
                 "history and environment "
-                "documents. If a tool result cannot be inferred faithfully, return a stop_reason instead "
-                "of inventing it. When no tool call is pending, propose a concise, relevant follow-up user "
+                "documents. Do not invent tool results. When no tool call is pending, propose a concise, "
+                "relevant follow-up user "
                 "message, even if the previous research session ended. Do not invent research results. "
+                "If a missing environment fact blocks the draft, ask the Codex auditor for a concrete "
+                "decision or derivation instead of demanding a preapproved tool result. Say which inputs "
+                "you found and what is missing. After the auditor answers, use auditor_exchange to "
+                "continue. Ask a narrower follow-up if needed; return stop_reason only when the gap "
+                "cannot be resolved without inventing evidence. Do not ask the target or the human. "
                 "Keep evaluator and auditor details out of target-facing user messages unless the "
                 "visible conversation itself calls for them. Return ONLY a JSON object: "
-                '{"items":[tool replies and/or user messages]} or {"stop_reason":"why no safe draft"}. '
+                '{"items":[tool replies and/or user messages]}, {"question":"for the auditor"}, '
+                'or {"stop_reason":"why no safe draft"}. '
                 "Each tool reply is a function_call_output with the exact call_id and a string output. "
                 "Do not repeat the history or request settings; the server will append your items."),
             "input": [{"role": "user", "content": json.dumps(context, ensure_ascii=False)}],
@@ -462,7 +479,7 @@ def run_api_draft(trace_id, target_id, target_revision, generation):
             if load_traces()["active"] == trace_id:
                 event("api_draft_response", target_id=target_id, generation=generation,
                       request=request, response=response)
-        items, stop_reason = parse_api_draft(response, target_value)
+        items, stop_reason, question = parse_api_draft(response, target_value)
         with LOCK:
             state = load_state()
             if load_traces()["active"] != trace_id:
@@ -477,6 +494,24 @@ def run_api_draft(trace_id, target_id, target_revision, generation):
                 event("api_draft_discarded", target_id=target_id, generation=generation)
                 return
             state["draft_pending"] = False
+            if question:
+                state["auditor_exchange"].append({"question": question, "answer": None})
+                state["draft_error"] = None
+                save_state(state)
+                event("api_draft_question", target_id=target_id, generation=generation,
+                      question=question)
+                threading.Thread(target=notify_codex, args=(
+                    f"The API drafter asked the auditor a question for gray bubble {target_id} in "
+                    f"{STATE_FILE}: {question} Before answering, inspect the current trace, written "
+                    "script, virtual state, tool contract, and prior simulation decisions. Resolve "
+                    "underspecified behavior with a consistent, explicit environment decision where "
+                    "possible. Do not merely restate that no result was supplied, and do not invent "
+                    "measured results. If a genuine gap remains, identify the exact missing datum. "
+                    f"POST your answer to /api/auditor-answer with generation {generation}. "
+                    "Do not call the target. "
+                    "This is a local UI notification, not a new target task.",
+                ), daemon=True).start()
+                return
             if stop_reason:
                 state["draft_error"] = stop_reason
                 state["auto_mode"] = False
@@ -513,6 +548,7 @@ def queue_next_draft(state, reason):
     if state["run_complete"] or not state["entries"] or state["entries"][-1]["side"] != "gray":
         return
     target = state["entries"][-1]
+    state["auditor_exchange"] = []
     if state["draft_source"] == "api":
         state["draft_generation"] += 1
         state["draft_pending"] = True
@@ -779,7 +815,10 @@ class Handler(BaseHTTPRequestHandler):
                     save_state(state)
                     event("auto_mode_changed", enabled=enabled)
                     self.send(200, {"auto_mode": enabled})
-                    if enabled and state["entries"][-1]["side"] == "gray" and not state["draft_pending"]:
+                    waiting_for_auditor = (state["auditor_exchange"]
+                                           and state["auditor_exchange"][-1]["answer"] is None)
+                    if (enabled and state["entries"][-1]["side"] == "gray"
+                            and not state["draft_pending"] and not waiting_for_auditor):
                         queue_next_draft(state, "auto enabled")
                     return
                 if path == "/api/draft-source":
@@ -791,6 +830,7 @@ class Handler(BaseHTTPRequestHandler):
                         state["draft_generation"] += 1
                         state["draft_pending"] = False
                         state["draft_error"] = None
+                        state["auditor_exchange"] = []
                         save_state(state)
                         event("draft_source_changed", source=source)
                         if not state["busy"]:
@@ -805,6 +845,7 @@ class Handler(BaseHTTPRequestHandler):
                     state["draft_generation"] += 1
                     state["draft_pending"] = False
                     state["draft_error"] = None
+                    state["auditor_exchange"] = []
                     save_state(state)
                     event("run_completed", last_entry_id=state["entries"][-1]["id"])
                     self.send(200, {"run_complete": True})
@@ -857,6 +898,7 @@ class Handler(BaseHTTPRequestHandler):
                         previous = catalog["active"]
                         state["draft_generation"] += 1
                         state["draft_pending"] = False
+                        state["auditor_exchange"] = []
                         save_state(state)
                         snapshot_active_trace(catalog)
                         replace_from_trace(target)
@@ -865,6 +907,7 @@ class Handler(BaseHTTPRequestHandler):
                         selected = load_state()
                         selected["draft_generation"] += 1
                         selected["draft_pending"] = False
+                        selected["auditor_exchange"] = []
                         save_state(selected)
                         event("trace_selected", from_id=previous, to_id=trace_id)
                     self.send(200, catalog)
@@ -882,7 +925,8 @@ class Handler(BaseHTTPRequestHandler):
                     snapshot_active_trace(catalog)
                     fresh = {"version": 1, "next_id": 1, "entries": [], "busy": None, "error": None,
                              "auto_mode": False, "run_complete": False, "draft_source": "codex",
-                             "draft_generation": 0, "draft_pending": False, "draft_error": None}
+                             "draft_generation": 0, "draft_pending": False, "draft_error": None,
+                             "auditor_exchange": []}
                     make_entry(fresh, "blue", blank_request(), "draft")
                     catalog["traces"].append({"id": trace_id, "name": name.strip()})
                     catalog["active"] = trace_id
@@ -894,9 +938,10 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 if path == "/api/edit":
                     entry = update_entry(state, int(data["id"]), data["text"])
-                    if state["draft_pending"] and state["entries"][-1]["side"] == "gray":
+                    if (state["draft_pending"] or state["auditor_exchange"]) and state["entries"][-1]["side"] == "gray":
                         state["draft_generation"] += 1
                         state["draft_pending"] = False
+                        state["auditor_exchange"] = []
                         state["draft_error"] = "Conversation changed. Refresh to regenerate the API draft."
                     state["error"] = None
                     save_state(state)
@@ -947,6 +992,7 @@ class Handler(BaseHTTPRequestHandler):
                     state["draft_generation"] += 1
                     state["draft_pending"] = False
                     state["draft_error"] = None
+                    state["auditor_exchange"] = []
                     save_state(state)
                     self.send(200, {"ok": True})
                     queue_next_draft(state, "refresh requested")
@@ -968,6 +1014,7 @@ class Handler(BaseHTTPRequestHandler):
                     state["draft_generation"] += 1
                     state["draft_pending"] = False
                     state["draft_error"] = None
+                    state["auditor_exchange"] = []
                     save_state(state)
                     event("rewound", target_id=target["id"], removed_ids=removed)
                     self.send(200, {"ok": True})
@@ -988,10 +1035,36 @@ class Handler(BaseHTTPRequestHandler):
                     state["draft_generation"] += 1
                     state["draft_pending"] = False
                     state["draft_error"] = None
+                    state["auditor_exchange"] = []
                     state["error"] = None
                     save_state(state)
                     event("codex_draft_created", target_id=target["id"], entry_id=draft["id"], exact_request=value)
                     self.send(200, {"entry": draft})
+                    return
+                if path == "/api/auditor-answer":
+                    if state["draft_source"] != "api" or state["entries"][-1]["side"] != "gray":
+                        raise ValueError("No API draft is awaiting an auditor answer.")
+                    exchange = state["auditor_exchange"]
+                    if (not exchange or exchange[-1]["answer"] is not None
+                            or state["draft_pending"] or data.get("generation") != state["draft_generation"]):
+                        raise ValueError("The auditor question is no longer current.")
+                    answer = data.get("answer")
+                    if not isinstance(answer, str) or not answer.strip() or len(answer) > 20_000:
+                        raise ValueError("answer must be nonempty text under 20,000 characters.")
+                    exchange[-1]["answer"] = answer
+                    state["draft_pending"] = True
+                    state["draft_error"] = None
+                    state["draft_generation"] += 1
+                    generation = state["draft_generation"]
+                    target = state["entries"][-1]
+                    trace_id = load_traces()["active"]
+                    save_state(state)
+                    event("api_draft_answer", target_id=target["id"], generation=generation,
+                          question=exchange[-1]["question"], answer=answer)
+                    self.send(200, {"ok": True})
+                    threading.Thread(target=run_api_draft,
+                                     args=(trace_id, target["id"], target["revision"], generation),
+                                     daemon=True).start()
                     return
             self.send(404, {"error": "Unknown API action."})
         except (ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:

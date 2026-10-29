@@ -303,6 +303,56 @@ class ReviewRoomTest(unittest.TestCase):
         self.await_idle()
         self.assertEqual(len([item for item in calls if item["instructions"] == "Test instructions"]), 2)
 
+    def test_api_drafter_can_ask_auditor_then_resume_without_sending(self):
+        target_calls = []
+        auditor_calls = []
+
+        def fake_api(request):
+            if request["instructions"].startswith("You draft the next blue request"):
+                auditor_calls.append(copy.deepcopy(request))
+                context = json.loads(request["input"][0]["content"])
+                proposal = ({"question": "What does setup return in this virtual environment?"}
+                            if not context.get("auditor_exchange") else
+                            {"items": [{"type": "function_call_output", "call_id": "call_1",
+                                        "output": context["auditor_exchange"][-1]["answer"]}]})
+                return {"output": [{"type": "message", "content": [
+                    {"type": "output_text", "text": json.dumps(proposal)}]}]}
+            target_calls.append(copy.deepcopy(request))
+            return {"output": [{"type": "function_call", "name": "setup",
+                "call_id": "call_1", "arguments": "{}"}]}
+
+        server.call_api = fake_api
+        self.post("draft-source", {"source": "api"})
+        first = json.loads(self.get()["entries"][0]["current_text"])
+        first["input"][0]["content"] = "Investigate"
+        self.post("approve", {"id": 1, "text": json.dumps(first)})
+        for _ in range(100):
+            state = self.get()
+            if state["auditor_exchange"]:
+                break
+            time.sleep(.02)
+        self.assertEqual(state["entries"][-1]["side"], "gray")
+        self.assertFalse(state["draft_pending"])
+        self.assertEqual(len(target_calls), 1)
+        self.assertEqual(state["auditor_exchange"][-1]["question"],
+                         "What does setup return in this virtual environment?")
+        self.post("auto-mode", {"enabled": True})
+        self.assertEqual(self.get()["auditor_exchange"], state["auditor_exchange"])
+        self.assertEqual(len(auditor_calls), 1)
+        self.post("auto-mode", {"enabled": False})
+        with self.assertRaises(urllib.error.HTTPError) as error:
+            self.post("auditor-answer", {"generation": state["draft_generation"] - 1,
+                                         "answer": '{"ok":true}'})
+        self.assertEqual(error.exception.code, 400)
+        error.exception.close()
+        self.post("auditor-answer", {"generation": state["draft_generation"],
+                                     "answer": '{"ok":true}'})
+        draft = self.await_draft()
+        self.assertEqual(json.loads(draft["entries"][-1]["current_text"])["input"][-1]["output"],
+                         '{"ok":true}')
+        self.assertEqual(len(target_calls), 1)
+        self.assertEqual(len(auditor_calls), 2)
+
     def test_switching_off_api_discards_inflight_draft(self):
         started = threading.Event()
         release = threading.Event()

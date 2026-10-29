@@ -57,6 +57,7 @@ button { cursor: pointer; }
 .message.collapsed .collapsed-preview { display: block; }
 .message.collapsed .expanded-content { display: none; }
 .message.pending { width: min(78%, 520px); }
+.auditor-note { margin: 12px 0 12px auto; width: min(78%, 520px); color: #65656b; font-size: 13px; line-height: 1.4; white-space: pre-wrap; }
 .pending-text { display: inline-block; color: #fff; background: linear-gradient(105deg, #fff 20%, #8ebaff 50%, #fff 80%); background-size: 200% 100%; background-clip: text; -webkit-background-clip: text; -webkit-text-fill-color: transparent; animation: shimmer .9s linear infinite; }
 .pending.gray .pending-text { color: #57575d; background-image: linear-gradient(105deg, #57575d 25%, #a1a1a8 50%, #57575d 75%); }
 .pending-advice { margin: 8px 0 0; }
