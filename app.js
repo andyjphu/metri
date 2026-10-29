@@ -798,7 +798,7 @@
       await finishEdits();
       if (enabled && state?.run_complete) throw Error("This run is complete. Rewind to continue it.");
       if (enabled && state?.entries.at(-1)?.status === "stale")
-        throw Error("Refresh the stale blue draft before turning on AutoApprove.");
+        throw Error("Refresh the stale blue draft before turning on Auto.");
       const result = await api("/api/auto-mode", {enabled});
       state.auto_mode = result.auto_mode;
       await refresh(true, true);
