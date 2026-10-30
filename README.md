@@ -1,5 +1,7 @@
 # Metri
 
+Current version: **2.1.0**. See [release notes](RELEASE_NOTES.md).
+
 Install dependencies with `python3 -m pip install -r metri/requirements.txt`. Run `python3 -m metri.server --port 8765` from the repository root, then open <http://127.0.0.1:8765>.
 
 Agents setting up Metri should follow [AGENTS.md](AGENTS.md), including provider-key checks before starting the server.
