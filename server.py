@@ -621,7 +621,7 @@ def parse_api_draft(response, target):
     return items, None, None
 
 
-def run_api_draft(trace_id, target_id, target_revision, generation):
+def run_api_draft(trace_id, target_id, target_revision, generation, force_response=False):
     try:
         with LOCK:
             state = load_state()
@@ -681,6 +681,13 @@ def run_api_draft(trace_id, target_id, target_revision, generation):
         }
         if model == previous["model"] and previous.get("access_programs"):
             request["access_programs"] = previous["access_programs"]
+        if force_response:
+            request["instructions"] += (
+                " The human requested an API response now. Resolve remaining underspecified "
+                "virtual-environment details from the supplied contracts and prior decisions. "
+                "Return an items object with a complete next blue draft. Do not ask another "
+                "auditor question or return stop_reason merely because an exact oracle is absent. "
+                "Do not invent measured research results or call the evaluated target.")
         response = call_api(request)
         with LOCK:
             if load_traces()["active"] == trace_id:
@@ -1395,7 +1402,10 @@ class Handler(BaseHTTPRequestHandler):
                 if path == "/api/cancel-draft":
                     if state.get("pending_edit") or state["busy"]:
                         raise ValueError("Finish the current edit or model call first.")
-                    if state["entries"][-1]["side"] != "gray" or not state["draft_pending"]:
+                    waiting_for_auditor = (state["draft_source"] == "api"
+                                           and state["auditor_exchange"]
+                                           and state["auditor_exchange"][-1]["answer"] is None)
+                    if state["entries"][-1]["side"] != "gray" or not (state["draft_pending"] or waiting_for_auditor):
                         raise ValueError("No blue draft is pending.")
                     target_id = state["entries"][-1]["id"]
                     cancelled_generation = state["draft_generation"]
@@ -1407,6 +1417,34 @@ class Handler(BaseHTTPRequestHandler):
                     event("draft_cancelled", target_id=target_id,
                           generation=cancelled_generation, source=state["draft_source"])
                     self.send(200, {"ok": True})
+                    return
+                if path == "/api/force-api-draft":
+                    if state.get("pending_edit") or state["busy"]:
+                        raise ValueError("Finish the current edit or model call first.")
+                    waiting_for_auditor = (state["auditor_exchange"]
+                                           and state["auditor_exchange"][-1]["answer"] is None)
+                    if (state["draft_source"] != "api" or state["entries"][-1]["side"] != "gray"
+                            or not (state["draft_pending"] or waiting_for_auditor)):
+                        raise ValueError("No API draft is waiting for a response.")
+                    if waiting_for_auditor:
+                        answer = "User requested the API drafter to decide and respond without an auditor answer."
+                        state["auditor_exchange"][-1].update(answer=answer, forced=True)
+                        for item in reversed(state["auditor_history"]):
+                            if item["after_gray_id"] == state["entries"][-1]["id"] and item["answer"] is None:
+                                item.update(answer=answer, forced=True)
+                                break
+                    state["draft_generation"] += 1
+                    state["draft_pending"] = True
+                    state["draft_error"] = None
+                    generation = state["draft_generation"]
+                    target = state["entries"][-1]
+                    trace_id = load_traces()["active"]
+                    save_state(state)
+                    event("api_draft_forced", target_id=target["id"], generation=generation)
+                    self.send(202, {"ok": True})
+                    threading.Thread(target=run_api_draft,
+                                     args=(trace_id, target["id"], target["revision"], generation, True),
+                                     daemon=True).start()
                     return
                 if state["busy"]:
                     raise ValueError("A model call is still running.")

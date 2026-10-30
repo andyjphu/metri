@@ -929,6 +929,85 @@ class MetriTest(unittest.TestCase):
         later_context = json.loads(auditor_calls[-1]["input"][0]["content"])
         self.assertEqual(later_context["prior_auditor_answers"][-1]["answer"], '{"ok":true}')
 
+    def test_cancel_waiting_auditor_question_rejects_late_answer(self):
+        target_calls = []
+        def fake_api(request):
+            if request["instructions"].startswith("You draft the next blue request"):
+                proposal = {"question": "What should setup return?"}
+            else:
+                target_calls.append(copy.deepcopy(request))
+                return {"output": [{"type": "function_call", "name": "setup",
+                                    "call_id": "call_1", "arguments": "{}"}]}
+            return {"output": [{"type": "message", "content": [
+                {"type": "output_text", "text": json.dumps(proposal)}]}]}
+        server.call_api = fake_api
+        self.post("draft-source", {"source": "api"})
+        first = json.loads(self.get()["entries"][0]["current_text"])
+        first["input"][0]["content"] = "Investigate"
+        self.post("approve", {"id": 1, "text": json.dumps(first)})
+        for _ in range(100):
+            state = self.get()
+            if state["auditor_exchange"]:
+                break
+            time.sleep(.02)
+        self.assertEqual(len(state["auditor_exchange"]), 1)
+        old_generation = state["draft_generation"]
+        self.post("cancel-draft", {})
+        cancelled = self.get()
+        self.assertEqual(len(cancelled["entries"]), 2)
+        self.assertFalse(cancelled["draft_pending"])
+        self.assertFalse(cancelled["auto_generate"])
+        self.assertEqual(cancelled["auditor_exchange"], [])
+        with self.assertRaises(urllib.error.HTTPError) as error:
+            self.post("auditor-answer", {"generation": old_generation, "answer": "late"})
+        self.assertEqual(error.exception.code, 400)
+        error.exception.close()
+        self.assertEqual(len(target_calls), 1)
+
+    def test_force_api_response_resolves_auditor_wait_without_target_call(self):
+        target_calls = []
+        drafter_calls = []
+        def fake_api(request):
+            if request["instructions"].startswith("You draft the next blue request"):
+                drafter_calls.append(copy.deepcopy(request))
+                if "The human requested an API response now" in request["instructions"]:
+                    proposal = {"items": [{"type": "function_call_output", "call_id": "call_1",
+                                           "output": '{"ok":true}'}]}
+                else:
+                    proposal = {"question": "What should setup return?"}
+                return {"output": [{"type": "message", "content": [
+                    {"type": "output_text", "text": json.dumps(proposal)}]}]}
+            target_calls.append(copy.deepcopy(request))
+            return {"output": [{"type": "function_call", "name": "setup",
+                                "call_id": "call_1", "arguments": "{}"}]}
+        server.call_api = fake_api
+        self.post("draft-source", {"source": "api"})
+        first = json.loads(self.get()["entries"][0]["current_text"])
+        first["input"][0]["content"] = "Investigate"
+        self.post("approve", {"id": 1, "text": json.dumps(first)})
+        for _ in range(100):
+            state = self.get()
+            if state["auditor_exchange"]:
+                break
+            time.sleep(.02)
+        self.assertEqual(len(state["auditor_exchange"]), 1)
+        self.post("force-api-draft", {})
+        draft = self.await_draft()
+        self.assertEqual(len(target_calls), 1)
+        self.assertEqual(len(drafter_calls), 2)
+        self.assertTrue(draft["auditor_history"][-1]["forced"])
+        self.assertEqual(json.loads(draft["entries"][-1]["current_text"])["input"][-1]["output"],
+                         '{"ok":true}')
+        self.assertEqual(draft["entries"][-1]["status"], "draft")
+        generated_request = json.loads(draft["entries"][-1]["current_text"])
+        self.post("rewind", {"id": 2, "choose_next": True})
+        removed_blue = self.get()
+        self.assertEqual(len(removed_blue["entries"]), 2)
+        self.assertEqual(removed_blue["auditor_history"][-1]["question"], "What should setup return?")
+        self.assertTrue(removed_blue["auditor_history"][-1]["forced"])
+        self.post("manual-draft", {"request": generated_request})
+        self.assertEqual(self.get()["auditor_history"][-1]["after_gray_id"], 2)
+
     def test_switching_off_api_discards_inflight_draft(self):
         started = threading.Event()
         release = threading.Event()

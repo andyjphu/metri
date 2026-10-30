@@ -806,6 +806,8 @@
       entries.findIndex((entry) => entry.id === state.busy.entry_id) : -1;
     const visibleEntries = swapIndex < 0 ? entries : entries.slice(0, swapIndex + 1);
     const auditorByGray = new Map();
+    const auditorWaiting = state.draft_source === "api" && state.auditor_exchange?.at(-1)?.answer == null &&
+      state.auditor_exchange?.length > 0;
     for (const exchange of state.auditor_history || []) {
       const items = auditorByGray.get(exchange.after_gray_id) || [];
       items.push(exchange);
@@ -823,7 +825,7 @@
     renderRequestContext();
     $("#collapse-all").checked = collapseAll;
     $("#messages").innerHTML = visibleEntries.map((entry, index) => {
-      if (index === swapIndex) return `<article class="message gray pending" id="m-${entry.id}" data-id="${entry.id}" aria-live="polite"><div class="bubble"><span class="pending-text">Pending response from provider.</span></div></article>`;
+      if (index === swapIndex) return `<article class="message auditor pending" id="m-${entry.id}" data-id="${entry.id}" aria-live="polite"><div class="message-head">Metri status (not shown to any evaluated agents)</div><div class="bubble"><span class="pending-text">Pending response from provider.</span></div></article>`;
       const collapsed = isCollapsed(entry);
       const desc = description(entry);
       const editable = isEditable(entry);
@@ -858,24 +860,28 @@
         <div class="message-head">${messageHeading(entry, index)} · ${escapeHtml(desc)}</div>
         <div class="bubble">${taps}${searchBar}<div class="collapsed-preview ${viewMode}">${escapeHtml(preview)}</div><div class="expanded-content">${viewMode === "raw" ? `<textarea class="raw-editor" spellcheck="false" aria-label="${escapeHtml(label(entry))} JSON" data-id="${entry.id}" ${editable ? "" : "readonly"}></textarea>` : `<div class="message-text ${viewMode}" data-id="${entry.id}"></div>${editors}`}</div></div>
       </article>`;
-      const auditor = (auditorByGray.get(entry.id) || []).map((exchange) => {
+      const auditorExchanges = auditorByGray.get(entry.id) || [];
+      const auditor = auditorExchanges.map((exchange, exchangeIndex) => {
         const pendingAnswer = exchange.answer == null && state.auditor_exchange?.at(-1)?.question === exchange.question &&
           state.auditor_exchange?.at(-1)?.answer == null;
-        return `<article class="message auditor"><div class="message-head">Auditor question (not shown to any evaluated agents)${pendingAnswer ? " | Pending response from your agent" : ""}</div><div class="bubble"><div class="auditor-part">${escapeHtml(exchange.question)}</div>${exchange.answer == null ? "" : `<div class="auditor-answer"><div class="auditor-part-label">Answer to auditor</div><div class="auditor-part">${escapeHtml(exchange.answer)}</div></div>`}</div></article>`;
+        const showingPending = entry.id === last?.id && exchangeIndex === auditorExchanges.length - 1 &&
+          state.draft_source === "api" && !state.pending_edit && (state.draft_pending || auditorWaiting);
+        const pendingControls = `<hr class="auditor-divider" aria-hidden="true">${showingPending ? `<div class="auditor-pending"><span class="pending-text">${auditorWaiting ? "Pending response from your agent." : "Generating draft from API."}</span><div class="pending-actions"><button type="button" data-action="cancel-draft">Cancel</button><button type="button" data-action="force-api-draft">Force API response</button></div></div>` : ""}`;
+        return `<article class="message auditor"><div class="message-head">Auditor question (not shown to any evaluated agents)${pendingAnswer ? " | Pending response from your agent" : ""}</div><div class="bubble"><div class="auditor-part">${escapeHtml(exchange.question)}</div>${exchange.answer == null ? "" : `<div class="auditor-answer"><div class="auditor-part-label">${exchange.forced ? "Continued without auditor answer" : "Answer to auditor"}</div><div class="auditor-part">${escapeHtml(exchange.answer)}</div></div>`}${pendingControls}</div></article>`;
       }).join("");
       return message + auditor;
     }).join("") + (state.busy?.kind === "swap" ? "" : state.run_complete ?
       last?.side === "gray" && !state.pending_edit ?
         `<article class="message blue draft-add"><div class="add-options"><button type="button" data-action="manual-compose" aria-label="Create manual request">+ Manual</button></div></article>` : "" : state.busy?.kind === "target" ?
-      `<article class="message gray pending"><div class="bubble"><span class="pending-text">Pending response from provider.</span></div></article>` :
+      `<article class="message auditor pending"><div class="message-head">Metri status (not shown to any evaluated agents)</div><div class="bubble"><span class="pending-text">Pending response from provider.</span></div></article>` :
       last?.side === "blue" && ["draft", "approved"].includes(last.status) && !state.pending_edit ?
         `<article class="message gray response-add"><div class="add-options"><button type="button" data-action="${last.status === "approved" ? "generate-response" : "approve"}" aria-label="Generate AI response">+ AI</button><button type="button" data-action="manual-compose" aria-label="Create manual response">+ Manual</button></div></article>` :
       last?.side === "gray" && !state.pending_edit ?
-        state.draft_pending ?
-          `<article class="message blue pending"><div class="bubble"><span class="pending-text">${state.draft_source === "api" ? "Generating draft from API." : "Pending a response from your agent."}</span>${state.draft_source === "api" ? "" : `<p class="pending-advice">If the message has been pending for more than 2 minutes, tell your agent: “Read metri/data/session.json and POST a full draft with its current draft_generation to /api/codex-draft. Do not call the target.”</p>`}<button class="pending-cancel" type="button" data-action="cancel-draft">Cancel</button></div></article>` :
-        state.draft_source === "api" && state.auditor_exchange?.at(-1)?.answer === null ? "" :
+        state.draft_source === "api" && (state.draft_pending || auditorWaiting) && (auditorByGray.get(last.id) || []).length ? "" :
+        state.draft_pending || auditorWaiting ?
+          `<article class="message auditor pending"><div class="message-head">Metri status (not shown to any evaluated agents)</div><div class="bubble"><span class="pending-text">${auditorWaiting ? "Pending response from your agent." : state.draft_source === "api" ? "Generating draft from API." : "Pending a response from your agent."}</span>${state.draft_source === "api" ? "" : `<p class="pending-advice">If the message has been pending for more than 2 minutes, tell your agent: “Read metri/data/session.json and POST a full draft with its current draft_generation to /api/codex-draft. Do not call the target.”</p>`}<div class="pending-actions"><button class="pending-cancel" type="button" data-action="cancel-draft">Cancel</button>${state.draft_source === "api" ? `<button class="pending-force" type="button" data-action="force-api-draft">Force API response</button>` : ""}</div></div></article>` :
         state.draft_source === "api" && state.draft_error && state.auto_generate ?
-          `<div class="auditor-note">${escapeHtml(state.draft_error)}</div>` :
+          `<article class="message auditor"><div class="message-head">Metri status (not shown to any evaluated agents)</div><div class="bubble">${escapeHtml(state.draft_error)}</div></article>` :
           `<article class="message blue draft-add"><div class="add-options"><button type="button" data-action="refresh-draft" aria-label="Generate AI request">+ AI</button><button type="button" data-action="manual-compose" aria-label="Create manual request">+ Manual</button></div></article>` : "");
     entries.forEach((entry) => {
       if (isCollapsed(entry)) return;
@@ -1192,6 +1198,10 @@
         return;
       } else if (name === "cancel-draft") {
         await api("/api/cancel-draft", {});
+        await refresh(true, true);
+        return;
+      } else if (name === "force-api-draft") {
+        await api("/api/force-api-draft", {});
         await refresh(true, true);
         return;
       } else if (name === "refresh-response") {

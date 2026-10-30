@@ -1,3 +1,11 @@
+# Metri 2.2.2
+
+- Show pending auditor work inside the green bubble, below a subtle rule, with Cancel and Force API response controls. Other UI-only pending statuses are green too, so blue and gray message content remains the evaluated agent's exact request and response JSON.
+- Force API response asks the API drafter to resolve remaining virtual-environment gaps and produce a blue draft. It never calls the evaluated agent; the blue draft still needs approval.
+- Cancel closes an unanswered auditor question. Cancelled Agent generations remain invalid, and an auditor exchange stays visible when its later blue draft is deleted.
+
+Validation: `python3 -m unittest metri.test_server` (42 tests), `node --check app.js`, and `git diff --check`.
+
 # Metri 2.2.1
 
 - Cancel a pending blue draft. The placeholder disappears, automatic continuation pauses, and a late API or agent result cannot restore the cancelled draft. The next draft can be started with + AI.
