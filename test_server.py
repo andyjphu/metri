@@ -740,6 +740,72 @@ class MetriTest(unittest.TestCase):
             self.assertTrue(wake.called)
             self.assertTrue(self.get()["auto_generate"])
 
+    def test_cancel_pending_agent_draft_rejects_late_reply_and_allows_new_draft(self):
+        self.post("auto-generate", {"enabled": False})
+        first = json.loads(self.get()["entries"][0]["current_text"])
+        first["input"][0]["content"] = "Investigate"
+        self.post("approve", {"id": 1, "text": json.dumps(first)})
+        gray = self.await_idle()["entries"][-1]
+        self.post("refresh-draft", {"id": gray["id"]})
+        pending = self.get()
+        old_generation = pending["draft_generation"]
+        self.assertTrue(pending["draft_pending"])
+        self.post("cancel-draft", {})
+        cancelled = self.get()
+        self.assertEqual(len(cancelled["entries"]), 2)
+        self.assertFalse(cancelled["draft_pending"])
+        self.assertFalse(cancelled["auto_generate"])
+        self.assertFalse(cancelled["auto_mode"])
+        draft = copy.deepcopy(first)
+        draft["input"] += json.loads(gray["current_text"])["output"] + [
+            {"type": "function_call_output", "call_id": "call_1", "output": "reply"}
+        ]
+        for payload in ({"request": draft}, {"request": draft, "generation": old_generation}):
+            with self.assertRaises(urllib.error.HTTPError) as error:
+                self.post("codex-draft", payload)
+            self.assertEqual(error.exception.code, 400)
+            error.exception.close()
+        self.post("refresh-draft", {"id": gray["id"]})
+        new_generation = self.get()["draft_generation"]
+        self.assertGreater(new_generation, old_generation)
+        created = self.post("codex-draft", {"request": draft,
+                                             "generation": new_generation})["entry"]
+        self.assertEqual(created["id"], 3)
+        self.assertFalse(self.get()["draft_pending"])
+        self.assertEqual(len(self.target_requests), 1)
+
+    def test_cancel_pending_api_draft_discards_late_provider_reply(self):
+        self.post("auto-generate", {"enabled": False})
+        first = json.loads(self.get()["entries"][0]["current_text"])
+        first["input"][0]["content"] = "Investigate"
+        self.post("approve", {"id": 1, "text": json.dumps(first)})
+        gray = self.await_idle()["entries"][-1]
+        self.post("draft-source", {"source": "api"})
+        started = threading.Event()
+        release = threading.Event()
+        def delayed_drafter(_request):
+            started.set()
+            release.wait(timeout=2)
+            proposal = {"items": [{"type": "function_call_output", "call_id": "call_1",
+                                   "output": "reply"}]}
+            return {"output": [{"type": "message", "content": [
+                {"type": "output_text", "text": json.dumps(proposal)}]}]}
+        server.call_api = delayed_drafter
+        self.post("refresh-draft", {"id": gray["id"]})
+        self.assertTrue(started.wait(timeout=1))
+        self.post("cancel-draft", {})
+        release.set()
+        for _ in range(100):
+            events = server.EVENTS_FILE.read_text()
+            if "api_draft_discarded" in events:
+                break
+            time.sleep(.01)
+        self.assertIn("api_draft_discarded", server.EVENTS_FILE.read_text())
+        state = self.get()
+        self.assertEqual(len(state["entries"]), 2)
+        self.assertFalse(state["draft_pending"])
+        self.assertFalse(state["auto_generate"])
+
     def test_api_drafting_waits_for_plus_when_auto_generate_off(self):
         calls = []
         def fake_api(request):
@@ -893,7 +959,7 @@ class MetriTest(unittest.TestCase):
             time.sleep(.02)
         state = self.get()
         self.assertEqual(state["draft_source"], "codex")
-        self.assertFalse(state["draft_pending"])
+        self.assertTrue(state["draft_pending"])
         self.assertEqual(len(state["entries"]), 2)
 
     def test_api_draft_never_auto_sends_without_auditor_review(self):
@@ -1151,6 +1217,11 @@ class MetriTest(unittest.TestCase):
         with urllib.request.urlopen(self.base + "/api/rail") as reply:
             self.assertEqual(json.load(reply)["points"],
                              [{"message": 3, "label": "Next request"}])
+        self.post("rewind", {"id": gray["id"], "choose_next": True})
+        third = self.post("manual-draft", {"request": draft})["entry"]
+        self.assertEqual(third["id"], 3)
+        self.assertEqual(self.get()["version_numbers"]["3"], 3)
+        self.assertEqual([item["number"] for item in self.variants(3)], [1, 2, 3])
 
     def test_removed_gray_keeps_bookmark_and_returns_as_next_version(self):
         self.post("auto-generate", {"enabled": False})
@@ -1180,6 +1251,13 @@ class MetriTest(unittest.TestCase):
         with urllib.request.urlopen(self.base + "/api/rail") as reply:
             self.assertEqual(json.load(reply)["points"],
                              [{"message": 4, "label": "Agent reply"}])
+        self.post("rewind", {"id": blue["id"], "choose_next": True})
+        third = self.post("manual-response", {"id": blue["id"], "response": {
+            "model": request["model"], "output": [{"type": "message", "role": "assistant",
+                "content": [{"type": "output_text", "text": "Third reply"}]}]}})["entry"]
+        self.assertEqual(third["id"], 4)
+        self.assertEqual(self.get()["version_numbers"]["4"], 3)
+        self.assertEqual([item["number"] for item in self.variants(4)], [1, 2, 3])
 
 
 if __name__ == "__main__":

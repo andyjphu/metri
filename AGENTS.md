@@ -9,3 +9,7 @@ Read [the Metri skill](skills/metri/SKILL.md) before handling a trace. The activ
 5. Confirm the server's `GET /api/swap-models` reports `openrouter_ready: true` before offering an OpenRouter swap as ready. This endpoint exposes no key. Check the active trace and its authorization before any target call; a running server is not permission to send one.
 
 Keep setup and simulation separate. Tool replies in simulated environments follow the environment package and the approved trace, not commands run in a parallel workspace.
+
+## Publishing a release
+
+Update `VERSION`, the version in `README.md`, and the matching section of `RELEASE_NOTES.md` before tagging. Run the server tests and JavaScript syntax check, then publish a GitHub Release using that version's notes. Use the configured human Git identity; do not add an AI author, co-author, or sign-off. GitHub's default `main` currently has an older, separate history, while recent releases use `release/<version>` branches. Do not force-push or merge those histories merely to publish; push the release branch and tag, then verify the GitHub Release and its notes.

@@ -1,3 +1,12 @@
+# Metri 2.2.1
+
+- Cancel a pending blue draft. The placeholder disappears, automatic continuation pauses, and a late API or agent result cannot restore the cancelled draft. The next draft can be started with + AI.
+- Remember Agent/API draft mode per trace across reloads and trace switches; browser storage mirrors the trace's saved setting. Per-message collapse choices remain in browser storage, while model configuration remains in YAML.
+- Balance the settings panel's bottom spacing and clarify when to contact your agent about a draft that has been pending for two minutes.
+- Consolidate draft invalidation and older-trace setting defaults in the server.
+
+Validation: `python3 -m unittest metri.test_server` (40 tests), `node --check app.js`, and `git diff --check`.
+
 # Metri 2.2.0
 
 - Remove a message and all later messages from the active conversation with the bubble's trash control. Metri archives the full pre-removal trace and pauses automatic continuation so you can choose the next message.

@@ -171,34 +171,24 @@ def compact_ids(state):
     return mapping
 
 
+def normalize_state(state):
+    """Fill settings added after older traces were recorded."""
+    defaults = {"auto_mode": False, "auto_generate": True, "run_complete": False,
+                "draft_source": "codex", "draft_generation": 0, "draft_pending": False,
+                "draft_error": None, "codex_generation_required": False,
+                "auditor_exchange": [], "auditor_history": [], "pending_edit": None}
+    for key, value in defaults.items():
+        state.setdefault(key, copy.deepcopy(value))
+    return state
+
+
 def load_state():
     if STATE_FILE.exists():
-        state = json.loads(STATE_FILE.read_text())
-        state.setdefault("auto_mode", False)
-        state.setdefault("auto_generate", True)
-        state.setdefault("run_complete", False)
-        state.setdefault("draft_source", "codex")
-        state.setdefault("draft_generation", 0)
-        state.setdefault("draft_pending", False)
-        state.setdefault("draft_error", None)
-        state.setdefault("auditor_exchange", [])
-        state.setdefault("auditor_history", [])
-        state.setdefault("pending_edit", None)
-        return state
+        return normalize_state(json.loads(STATE_FILE.read_text()))
     catalog = load_traces()
     snapshot = DATA / "traces" / catalog["active"] / "session.json"
     if snapshot.is_file():
-        state = json.loads(snapshot.read_text())
-        state.setdefault("auto_mode", False)
-        state.setdefault("auto_generate", True)
-        state.setdefault("run_complete", False)
-        state.setdefault("draft_source", "codex")
-        state.setdefault("draft_generation", 0)
-        state.setdefault("draft_pending", False)
-        state.setdefault("draft_error", None)
-        state.setdefault("auditor_exchange", [])
-        state.setdefault("auditor_history", [])
-        state.setdefault("pending_edit", None)
+        state = normalize_state(json.loads(snapshot.read_text()))
         save_state(state)
         return state
     state = {"version": 1, "next_id": 1, "entries": [], "busy": None, "error": None,
@@ -764,6 +754,14 @@ def run_api_draft(trace_id, target_id, target_revision, generation):
                 event("api_draft_failed", target_id=target_id, error=str(exc))
 
 
+def invalidate_draft(state):
+    """Make any in-flight draft obsolete before changing the visible conversation."""
+    state["draft_generation"] += 1
+    state["draft_pending"] = False
+    state["draft_error"] = None
+    state["auditor_exchange"] = []
+
+
 def queue_next_draft(state, reason, force=False):
     if state.get("pending_edit") or state["run_complete"] or not state["entries"] or state["entries"][-1]["side"] != "gray":
         return
@@ -771,13 +769,13 @@ def queue_next_draft(state, reason, force=False):
     state["auditor_exchange"] = []
     if not state["auto_generate"] and not force:
         return
+    state["draft_generation"] += 1
+    state["draft_pending"] = True
+    state["draft_error"] = None
+    generation = state["draft_generation"]
+    save_state(state)
     if state["draft_source"] == "api":
-        state["draft_generation"] += 1
-        state["draft_pending"] = True
-        state["draft_error"] = None
-        generation = state["draft_generation"]
         trace_id = load_traces()["active"]
-        save_state(state)
         event("api_draft_started", target_id=target["id"], generation=generation, reason=reason)
         threading.Thread(target=run_api_draft,
                          args=(trace_id, target["id"], target["revision"], generation),
@@ -807,10 +805,9 @@ def queue_next_draft(state, reason, force=False):
                    "the next full outgoing request via POST /api/codex-draft. Do not send it to the "
                    "target; the human must approve the blue bubble. This is a local UI notification, "
                    "not a new task.")
-    if force and not state["auto_generate"]:
-        state["draft_pending"] = True
-        state["draft_error"] = None
-        save_state(state)
+    message += (f" Include generation {generation} in the POST /api/codex-draft JSON body "
+                "alongside request, so a cancelled draft cannot be restored.")
+    event("codex_draft_queued", target_id=target["id"], generation=generation, reason=reason)
     threading.Thread(target=notify_codex, args=(message,), daemon=True).start()
 
 
@@ -1346,7 +1343,9 @@ class Handler(BaseHTTPRequestHandler):
                     waiting_for_auditor = (state["auditor_exchange"]
                                            and state["auditor_exchange"][-1]["answer"] is None)
                     if (enabled and state["entries"][-1]["side"] == "gray"
-                            and state["auto_generate"] and not state["draft_pending"] and not waiting_for_auditor):
+                            and state["auto_generate"]
+                            and (not state["draft_pending"] or state["draft_source"] == "codex")
+                            and not waiting_for_auditor):
                         queue_next_draft(state, "auto enabled")
                     return
                 if path == "/api/auto-generate":
@@ -1358,10 +1357,7 @@ class Handler(BaseHTTPRequestHandler):
                     if enabled != state["auto_generate"]:
                         state["auto_generate"] = enabled
                         if not enabled:
-                            state["draft_generation"] += 1
-                            state["draft_pending"] = False
-                            state["draft_error"] = None
-                            state["auditor_exchange"] = []
+                            invalidate_draft(state)
                         save_state(state)
                         event("auto_generate_changed", enabled=enabled)
                         if (enabled and not state["busy"] and not state["run_complete"]
@@ -1377,10 +1373,7 @@ class Handler(BaseHTTPRequestHandler):
                         raise ValueError("Draft source must be api or codex.")
                     if source != state["draft_source"]:
                         state["draft_source"] = source
-                        state["draft_generation"] += 1
-                        state["draft_pending"] = False
-                        state["draft_error"] = None
-                        state["auditor_exchange"] = []
+                        invalidate_draft(state)
                         save_state(state)
                         event("draft_source_changed", source=source)
                         if not state["busy"]:
@@ -1394,13 +1387,26 @@ class Handler(BaseHTTPRequestHandler):
                         raise ValueError("Wait for the current model call to finish.")
                     state["auto_mode"] = False
                     state["run_complete"] = True
-                    state["draft_generation"] += 1
-                    state["draft_pending"] = False
-                    state["draft_error"] = None
-                    state["auditor_exchange"] = []
+                    invalidate_draft(state)
                     save_state(state)
                     event("run_completed", last_entry_id=state["entries"][-1]["id"])
                     self.send(200, {"run_complete": True})
+                    return
+                if path == "/api/cancel-draft":
+                    if state.get("pending_edit") or state["busy"]:
+                        raise ValueError("Finish the current edit or model call first.")
+                    if state["entries"][-1]["side"] != "gray" or not state["draft_pending"]:
+                        raise ValueError("No blue draft is pending.")
+                    target_id = state["entries"][-1]["id"]
+                    cancelled_generation = state["draft_generation"]
+                    invalidate_draft(state)
+                    state["codex_generation_required"] = True
+                    state["auto_mode"] = False
+                    state["auto_generate"] = False
+                    save_state(state)
+                    event("draft_cancelled", target_id=target_id,
+                          generation=cancelled_generation, source=state["draft_source"])
+                    self.send(200, {"ok": True})
                     return
                 if state["busy"]:
                     raise ValueError("A model call is still running.")
@@ -1575,10 +1581,7 @@ class Handler(BaseHTTPRequestHandler):
                         if option["provider"] == "openrouter" and not openrouter_key():
                             raise ValueError("Enter an OpenRouter API key to regenerate this response.")
                     state["busy"] = {"kind": "swap", "entry_id": target["id"]}
-                    state["draft_generation"] += 1
-                    state["draft_pending"] = False
-                    state["draft_error"] = None
-                    state["auditor_exchange"] = []
+                    invalidate_draft(state)
                     state["error"] = None
                     trace_id = load_traces()["active"]
                     save_state(state)
@@ -1610,10 +1613,7 @@ class Handler(BaseHTTPRequestHandler):
                     source = parsed(state["entries"][index - 1])
                     validate_request(source)
                     state["busy"] = {"kind": "swap", "entry_id": target["id"]}
-                    state["draft_generation"] += 1
-                    state["draft_pending"] = False
-                    state["draft_error"] = None
-                    state["auditor_exchange"] = []
+                    invalidate_draft(state)
                     state["error"] = None
                     trace_id = load_traces()["active"]
                     save_state(state)
@@ -1718,10 +1718,7 @@ class Handler(BaseHTTPRequestHandler):
                     if not target.get("versions"):
                         target["versions"] = []
                         append_version(target, target["current_text"], "manual")
-                    state["draft_generation"] += 1
-                    state["draft_pending"] = False
-                    state["draft_error"] = None
-                    state["auditor_exchange"] = []
+                    invalidate_draft(state)
                     state["error"] = None
                     save_state(state)
                     event("manual_response_created", request_entry_id=entry["id"],
@@ -1751,10 +1748,7 @@ class Handler(BaseHTTPRequestHandler):
                         raise ValueError("Only the latest draft or gray response can be refreshed.")
                     state["run_complete"] = False
                     state["error"] = None
-                    state["draft_generation"] += 1
-                    state["draft_pending"] = False
-                    state["draft_error"] = None
-                    state["auditor_exchange"] = []
+                    invalidate_draft(state)
                     save_state(state)
                     self.send(200, {"ok": True})
                     queue_next_draft(state, "refresh requested", force=True)
@@ -1788,10 +1782,7 @@ class Handler(BaseHTTPRequestHandler):
                         target["status"] = "draft"
                     state["run_complete"] = False
                     state["error"] = None
-                    state["draft_generation"] += 1
-                    state["draft_pending"] = False
-                    state["draft_error"] = None
-                    state["auditor_exchange"] = []
+                    invalidate_draft(state)
                     save_state(state)
                     event("rewound", target_id=target["id"], removed_ids=removed,
                           choose_next=choose_next, archive=str(archive.relative_to(DATA)))
@@ -1802,6 +1793,14 @@ class Handler(BaseHTTPRequestHandler):
                 if path in {"/api/codex-draft", "/api/manual-draft"}:
                     if path == "/api/manual-draft" and (state["auto_mode"] or state["busy"]):
                         raise ValueError("Pause Auto and wait before creating a manual draft.")
+                    if path == "/api/codex-draft":
+                        generation = data.get("generation")
+                        if generation is not None and (not state["draft_pending"] or generation != state["draft_generation"]):
+                            raise ValueError("This draft request was cancelled or superseded.")
+                        if state.get("codex_generation_required") and (
+                                state["draft_source"] != "codex" or not state["draft_pending"]
+                                or generation != state["draft_generation"]):
+                            raise ValueError("Include the current draft generation after requesting a new draft.")
                     target = state["entries"][-1]
                     if target["side"] != "gray":
                         raise ValueError("A gray target bubble must be latest before drafting.")
@@ -1818,10 +1817,7 @@ class Handler(BaseHTTPRequestHandler):
                         active = next(item for item in draft["versions"] if item["id"] == draft["active_version"])
                         active["kind"] = "manual"
                         state["run_complete"] = False
-                    state["draft_generation"] += 1
-                    state["draft_pending"] = False
-                    state["draft_error"] = None
-                    state["auditor_exchange"] = []
+                    invalidate_draft(state)
                     state["error"] = None
                     save_state(state)
                     event("manual_draft_created" if path == "/api/manual-draft" else "codex_draft_created",
@@ -1869,7 +1865,7 @@ def main():
     args = parser.parse_args()
     with LOCK:
         state = load_state()
-        if state["draft_pending"]:
+        if state["draft_pending"] and state["draft_source"] == "api":
             state["draft_generation"] += 1
             state["draft_pending"] = False
             state["draft_error"] = "API draft interrupted by server restart. Refresh to retry."

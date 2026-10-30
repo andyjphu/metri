@@ -9,6 +9,7 @@
   let lastSignature = "";
   const viewModeKey = "metri:view-mode:v1";
   const collapseKey = (traceId) => `metri:collapse:v1:${traceId}`;
+  const draftSourceKey = (traceId) => `metri:draft-source:v1:${traceId}`;
   const scrollKey = (traceId) => `metri:scroll:v1:${traceId}`;
   const swapModelKey = "metri:swap-model:v1";
   const defaultModelKey = "metri:default-model:v1";
@@ -321,6 +322,8 @@
   function updateDraftSource() {
     if (changingDraftSource) return;
     const source = state?.draft_source === "api" ? "api" : "codex";
+    // The trace session is authoritative; this browser copy is a persisted UI preference.
+    if (traces?.active) storeValue(draftSourceKey(traces.active), source);
     $("#draft-source-control").dataset.mode = source;
     $("#draft-source-control").querySelectorAll("[data-source]").forEach((button) =>
       button.setAttribute("aria-pressed", String(button.dataset.source === source)));
@@ -868,14 +871,12 @@
       last?.side === "blue" && ["draft", "approved"].includes(last.status) && !state.pending_edit ?
         `<article class="message gray response-add"><div class="add-options"><button type="button" data-action="${last.status === "approved" ? "generate-response" : "approve"}" aria-label="Generate AI response">+ AI</button><button type="button" data-action="manual-compose" aria-label="Create manual response">+ Manual</button></div></article>` :
       last?.side === "gray" && !state.pending_edit ?
-        state.auto_generate === false && !state.draft_pending ?
-          `<article class="message blue draft-add"><div class="add-options"><button type="button" data-action="refresh-draft" aria-label="Generate AI request">+ AI</button><button type="button" data-action="manual-compose" aria-label="Create manual request">+ Manual</button></div></article>` :
-        state.draft_source === "api" ?
-          state.draft_pending ?
-            `<article class="message blue pending"><div class="bubble"><span class="pending-text">Generating draft from API.</span></div></article>` :
-            state.auditor_exchange?.at(-1)?.answer === null ? "" :
-              `<div class="auditor-note">${escapeHtml(state.draft_error || "No API draft pending.")}</div>` :
-          `<article class="message blue pending"><div class="bubble"><span class="pending-text">Pending a response from your agent.</span><p class="pending-advice">If it stalls, send: “Read metri/data/session.json and POST a full draft to /api/codex-draft. Do not call the target.”</p></div></article>` : "");
+        state.draft_pending ?
+          `<article class="message blue pending"><div class="bubble"><span class="pending-text">${state.draft_source === "api" ? "Generating draft from API." : "Pending a response from your agent."}</span>${state.draft_source === "api" ? "" : `<p class="pending-advice">If the message has been pending for more than 2 minutes, tell your agent: “Read metri/data/session.json and POST a full draft with its current draft_generation to /api/codex-draft. Do not call the target.”</p>`}<button class="pending-cancel" type="button" data-action="cancel-draft">Cancel</button></div></article>` :
+        state.draft_source === "api" && state.auditor_exchange?.at(-1)?.answer === null ? "" :
+        state.draft_source === "api" && state.draft_error && state.auto_generate ?
+          `<div class="auditor-note">${escapeHtml(state.draft_error)}</div>` :
+          `<article class="message blue draft-add"><div class="add-options"><button type="button" data-action="refresh-draft" aria-label="Generate AI request">+ AI</button><button type="button" data-action="manual-compose" aria-label="Create manual request">+ Manual</button></div></article>` : "");
     entries.forEach((entry) => {
       if (isCollapsed(entry)) return;
       const el = $(`#m-${entry.id} ${viewMode === "raw" ? ".raw-editor" : ".message-text"}`);
@@ -1187,6 +1188,10 @@
         await api("/api/refresh-draft", {id});
         renderedEditors.delete(id);
         saveError = false;
+        await refresh(true, true);
+        return;
+      } else if (name === "cancel-draft") {
+        await api("/api/cancel-draft", {});
         await refresh(true, true);
         return;
       } else if (name === "refresh-response") {
