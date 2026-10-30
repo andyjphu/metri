@@ -513,6 +513,7 @@ class MetriTest(unittest.TestCase):
         self.assertNotIn("test-key", server.EVENTS_FILE.read_text() + server.STATE_FILE.read_text())
         swap = next(event for event in events if event["kind"] == "gray_swapped")
         self.assertEqual(swap["removed_ids"], [3])
+
         self.assertEqual(len(json.loads((server.DATA / swap["archive"] / "session.json").read_text())["entries"]), 3)
         with urllib.request.urlopen(self.base + f"/api/response-variants?id={gray['id']}") as reply:
             variants = json.load(reply)["variants"]
@@ -532,6 +533,45 @@ class MetriTest(unittest.TestCase):
         self.assertIn("z-ai/glm-5.3", [item["model"] for item in variants_after])
         self.assertEqual([item["number"] for item in variants_after], [1, 2])
         self.assertTrue(variants_after[0]["active"])
+
+    def test_refresh_gray_regenerates_its_response_not_a_blue_draft(self):
+        first = json.loads(self.get()["entries"][0]["current_text"])
+        first["input"][0]["content"] = "Investigate"
+        self.post("approve", {"id": 1, "text": json.dumps(first)})
+        self.await_idle()
+        gray = self.get()["entries"][-1]
+        draft = copy.deepcopy(first)
+        draft["input"] += json.loads(gray["current_text"])["output"] + [
+            {"type": "function_call_output", "call_id": "call_1", "output": "{}"}]
+        self.post("codex-draft", {"request": draft})
+        self.post("refresh-response", {"id": gray["id"]})
+        state = self.await_idle()
+        self.assertEqual(len(self.target_requests), 2)
+        self.assertEqual(self.target_requests[1], self.target_requests[0])
+        self.assertEqual([entry["side"] for entry in state["entries"]], ["blue", "gray"])
+        self.assertEqual(len(self.variants(gray["id"])), 2)
+        events = [json.loads(line) for line in server.EVENTS_FILE.read_text().splitlines()]
+        self.assertTrue(any(event["kind"] == "gray_regenerated" for event in events))
+
+    def test_refresh_gray_keeps_selected_swap_model(self):
+        first = json.loads(self.get()["entries"][0]["current_text"])
+        first["input"][0]["content"] = "Investigate"
+        self.post("approve", {"id": 1, "text": json.dumps(first)})
+        self.await_idle()
+        seen = []
+        def fake_model(request, option):
+            seen.append(option["id"])
+            return {"model": option["model"], "output": [{"type": "message", "role": "assistant",
+                    "content": [{"type": "output_text", "text": "Alternative"}]}]}
+        server.call_swap_model = fake_model
+        self.post("swap-model", {"id": 2, "option": "sol-high"})
+        self.await_idle()
+        self.post("refresh-response", {"id": 2})
+        state = self.await_idle()
+        self.assertEqual(seen, ["sol-high", "sol-high"])
+        self.assertEqual(len(self.target_requests), 1)
+        self.assertEqual(len(state["entries"]), 2)
+        self.assertEqual(len(self.variants(2)), 3)
 
     def test_model_swap_can_replace_earlier_gray_without_retaining_later_outputs(self):
         first = json.loads(self.get()["entries"][0]["current_text"])

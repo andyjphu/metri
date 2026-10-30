@@ -85,7 +85,7 @@ button { cursor: pointer; }
 .rail-segment.tool { background: #ff3b30; }
 .rail-segment.chat { background: #34c759; }
 .rail-segment.mixed { background: #ff9500; }
-.rail-thumb { position: absolute; left: var(--line-left); width: var(--line-width); background: #fff; pointer-events: none; transition: left .15s ease, width .15s ease; }
+.rail-thumb { position: absolute; left: var(--line-left); width: var(--line-width); background: linear-gradient(to bottom, #fff 0 1px, #3c3c40 1px calc(100% - 1px), #fff calc(100% - 1px)); pointer-events: none; transition: left .15s ease, width .15s ease; }
 .rail-point { position: absolute; left: 0; display: block; width: 14px; height: 14px; padding: 0; transform: translateY(-50%); border: 0; border-radius: 50%; background: transparent; }
 .rail-point::before { content: ""; position: absolute; top: 7px; left: 5.5px; width: 3px; height: 3px; transform: translate(-50%, -50%) rotate(45deg); background: #616161; box-shadow: 0 0 0 1px #fff; transition: width .15s ease, height .15s ease; }
 .scroll-rail:hover .rail-point::before, .scroll-rail:focus-within .rail-point::before { width: 5px; height: 5px; }

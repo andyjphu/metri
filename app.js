@@ -472,6 +472,28 @@
     if (railFrame === null) railFrame = requestAnimationFrame(layoutRail);
   }
 
+  function revealTextareaMatch(editor, start, end) {
+    editor.focus({preventScroll: true});
+    editor.setSelectionRange(start, end);
+    const style = getComputedStyle(editor);
+    const mirror = document.createElement("div");
+    Object.assign(mirror.style, {
+      position: "fixed", left: "-100000px", top: "0", visibility: "hidden",
+      width: `${editor.clientWidth}px`, boxSizing: "border-box", whiteSpace: style.whiteSpace,
+      overflowWrap: style.overflowWrap, wordBreak: style.wordBreak, font: style.font,
+      letterSpacing: style.letterSpacing, tabSize: style.tabSize, padding: style.padding,
+      border: style.border,
+    });
+    const marker = document.createElement("span");
+    marker.textContent = editor.value.slice(start, end);
+    mirror.append(document.createTextNode(editor.value.slice(0, start)), marker);
+    document.body.append(mirror);
+    const top = marker.getBoundingClientRect().top - mirror.getBoundingClientRect().top;
+    mirror.remove();
+    const lineHeight = Number.parseFloat(style.lineHeight) || 18;
+    editor.scrollTop = Math.max(0, top - (editor.clientHeight - lineHeight) / 2);
+  }
+
   function updateMessageSearch(reveal = false) {
     if (!messageSearch) return;
     const article = $(`#m-${messageSearch.id}`);
@@ -533,11 +555,7 @@
       const match = messageMatches[messageSearch.index];
       if (match.mark) match.mark.scrollIntoView({block: "nearest"});
       else {
-        match.editor.focus({preventScroll: true});
-        match.editor.setSelectionRange(match.start, match.end);
-        const lines = match.editor.value.slice(0, match.start).split("\n").length - 1;
-        const lineHeight = Number.parseFloat(getComputedStyle(match.editor).lineHeight) || 18;
-        match.editor.scrollTop = Math.max(0, lines * lineHeight - match.editor.clientHeight / 2);
+        revealTextareaMatch(match.editor, match.start, match.end);
         article.querySelector(".message-search-input")?.focus({preventScroll: true});
       }
     }
@@ -728,7 +746,8 @@
       const controls = pending ? `${button(approveIcon, "Confirm edit", "confirm-edit", "approve")}${button(discardIcon, "Discard edit", "discard-edit")}` : blocked ? "" :
         entry.side === "blue" && ["draft", "stale"].includes(entry.status) ?
           `${entry.status === "draft" && !isManualVersion(entry) && !state.busy && sendingId !== entry.id ? button(approveIcon, "Approve and send", "approve", "approve") : ""}${index > 0 ? button(refreshIcon, "Refresh blue draft", "refresh-draft", "refresh-draft") : ""}` :
-          entry === last && entry.side === "gray" ? button(refreshIcon, "Refresh blue draft", "refresh-draft", "refresh-draft") :
+          entry.side === "gray" ?
+            `${index < entries.length - 1 ? button(rewindIcon, "Delete later messages and return here", "rewind") : ""}${button(refreshIcon, "Regenerate this response", "refresh-response", "refresh-response")}` :
           index < entries.length - 1 ? button(rewindIcon, "Delete later messages and return here", "rewind") : "";
       const pen = !blocked && !state.busy && (entry.side === "gray" || entry.status !== "stale") ?
         button(pencil, "Edit message", "edit", "edit") : "";
@@ -1073,6 +1092,13 @@
       } else if (name === "refresh-draft") {
         await finishEdits();
         await api("/api/refresh-draft", {id});
+        renderedEditors.delete(id);
+        saveError = false;
+        await refresh(true, true);
+        return;
+      } else if (name === "refresh-response") {
+        await finishEdits();
+        await api("/api/refresh-response", {id});
         renderedEditors.delete(id);
         saveError = false;
         await refresh(true, true);

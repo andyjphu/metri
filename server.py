@@ -1119,9 +1119,10 @@ def replace_gray(state, trace_id, target, raw_response, event_kind, variant_key=
     queue_next_draft(state, "gray response replaced")
 
 
-def run_model_swap(trace_id, target_id, target_revision, request, option):
+def run_model_swap(trace_id, target_id, target_revision, request, option, refresh=False):
     try:
-        response = call_swap_model(request, option)
+        response = call_target_api(request) if option is None else call_swap_model(request, option)
+        validate_target(response)
         with LOCK:
             state = load_state()
             target = current_entry(state, target_id)
@@ -1129,7 +1130,8 @@ def run_model_swap(trace_id, target_id, target_revision, request, option):
                     or target["revision"] != target_revision
                     or state["busy"] != {"kind": "swap", "entry_id": target_id}):
                 return
-            replace_gray(state, trace_id, target, dump(response), "gray_swapped",
+            replace_gray(state, trace_id, target, dump(response),
+                         "gray_regenerated" if refresh else "gray_swapped",
                          option=option, source_request=request)
     except Exception as exc:
         with LOCK:
@@ -1138,7 +1140,8 @@ def run_model_swap(trace_id, target_id, target_revision, request, option):
                 state["busy"] = None
                 state["error"] = str(exc)
                 save_state(state)
-                event("gray_swap_failed", entry_id=target_id, error=str(exc))
+                event("gray_regeneration_failed" if refresh else "gray_swap_failed",
+                      entry_id=target_id, error=str(exc))
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -1479,6 +1482,44 @@ class Handler(BaseHTTPRequestHandler):
                     state["error"] = None
                     save_state(state)
                     self.send(200, {"entry": entry})
+                    return
+                if path == "/api/refresh-response":
+                    if state["auto_mode"] or state["busy"]:
+                        raise ValueError("Turn Auto off and wait before regenerating a response.")
+                    target = current_entry(state, int(data["id"]))
+                    if not target or target["side"] != "gray":
+                        raise ValueError("Choose a gray response to regenerate.")
+                    index = state["entries"].index(target)
+                    source = parsed(state["entries"][index - 1])
+                    validate_request(source)
+                    response = parsed(target)
+                    response_model = response.get("model")
+                    same_model = (response_model is None or
+                                  (response_model == source.get("model") and
+                                   response.get("access_programs", {}) == source.get("access_programs", {})))
+                    option = None
+                    if not same_model:
+                        option = next((item for item in model_catalog()["models"]
+                                       if item["model"] == response_model and
+                                       item.get("access_programs", {}) == response.get("access_programs", {})), None)
+                        if option is None:
+                            raise ValueError("This response's model is not configured in models.yml.")
+                        if option["provider"] == "openrouter" and not openrouter_key():
+                            raise ValueError("Enter an OpenRouter API key to regenerate this response.")
+                    state["busy"] = {"kind": "swap", "entry_id": target["id"]}
+                    state["draft_generation"] += 1
+                    state["draft_pending"] = False
+                    state["draft_error"] = None
+                    state["auditor_exchange"] = []
+                    state["error"] = None
+                    trace_id = load_traces()["active"]
+                    save_state(state)
+                    event("gray_regeneration_requested", entry_id=target["id"], option=option,
+                          source_request=source)
+                    self.send(202, {"ok": True})
+                    threading.Thread(target=run_model_swap,
+                                     args=(trace_id, target["id"], target["revision"], source, option, True),
+                                     daemon=True).start()
                     return
                 if path == "/api/swap-model":
                     if state["auto_mode"]:
