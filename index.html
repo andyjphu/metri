@@ -36,14 +36,15 @@
         </div>
       </div>
     </header>
-    <div id="notice" class="notice" hidden></div>
+    <div id="notice" class="notice" hidden><span id="notice-content"></span><button id="notice-dismiss" type="button" aria-label="Dismiss notice" title="Dismiss"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6 18 18M18 6 6 18"/></svg></button></div>
     <div class="stream-frame">
-      <nav id="scroll-rail" class="scroll-rail" aria-label="Conversation map">
+      <nav id="scroll-rail" class="scroll-rail" aria-label="Conversation map: red tools, green messages, orange mixed">
         <div id="rail-track" class="rail-track">
           <div id="rail-segments" class="rail-segments" aria-hidden="true"></div>
           <div id="rail-thumb" class="rail-thumb" aria-hidden="true"></div>
           <div id="rail-points" class="rail-points"></div>
         </div>
+        <div class="rail-key" aria-hidden="true"><span><i class="tool"></i>Tools</span><span><i class="chat"></i>Messages</span><span><i class="mixed"></i>Mixed</span></div>
       </nav>
       <div id="stream" class="stream" aria-live="polite">
         <details id="request-context" class="request-context" open>
@@ -69,7 +70,7 @@
       <div id="swap-title" class="swap-title">Replace response</div>
       <div id="swap-existing">
         <div id="swap-variants" class="swap-options" role="radiogroup" aria-label="Generated responses"></div>
-        <button id="swap-new" class="swap-new" type="button"><span aria-hidden="true">+</span>New response</button>
+        <button id="swap-new" class="swap-new" type="button"><span class="swap-new-plus" aria-hidden="true">+</span><span id="swap-new-label">New response</span></button>
       </div>
       <div id="swap-generate" hidden>
         <button id="swap-back" class="swap-back" type="button">‹ Responses</button>
@@ -83,12 +84,16 @@
   <dialog id="manual-dialog" class="swap-dialog manual-dialog" aria-labelledby="manual-title">
     <form id="manual-form">
       <div id="manual-title" class="swap-title"></div>
-      <select id="manual-template" aria-label="Message template" hidden><option value="">Template</option></select>
+      <div id="manual-template-picker" class="manual-template-picker" hidden>
+        <button id="manual-template" class="manual-template-trigger" type="button" aria-label="Message template" aria-controls="manual-template-menu" aria-expanded="false"><span id="manual-template-label">No template</span><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m3.5 6 4.5 4 4.5-4"/></svg></button>
+        <div id="manual-template-menu" class="manual-template-menu" role="menu" aria-label="Message templates" hidden></div>
+      </div>
       <div id="manual-parts" class="manual-parts"></div>
       <div class="manual-add">
         <button id="manual-add-message" type="button"></button>
         <button id="manual-add-tool" type="button"></button>
       </div>
+      <div id="manual-warning" role="status" hidden></div>
       <div id="manual-error" class="swap-error" role="alert" hidden></div>
       <div class="swap-actions"><button id="manual-cancel" type="button">Cancel</button><button id="manual-submit" type="submit">Create</button></div>
     </form>

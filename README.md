@@ -1,6 +1,8 @@
 # Metri
 
-Current version: **2.1.0**. See [release notes](RELEASE_NOTES.md).
+Current version: **2.2.0**. See [release notes](RELEASE_NOTES.md).
+
+![Metri conversation with message versions and the scroll rail](images/conversation-2.2.png)
 
 Install dependencies with `python3 -m pip install -r metri/requirements.txt`. Run `python3 -m metri.server --port 8765` from the repository root, then open <http://127.0.0.1:8765>.
 
@@ -22,11 +24,13 @@ Bubble labels include the selected version and the model slug from [models.yml](
 
 In + Manual, choose a message from [templates.yml](templates.yml). It fills an editable user message. The neutral exit interview is available after a run is marked complete.
 
+![Manual request composer with an interview and tool results](images/manual-request-2.2.png)
+
 On any gray bubble, ⇄ shows previously generated responses for that request, numbered by generation order. Choose one to restore it, or tap + to generate another using a model from [models.yml](models.yml). For GLM, enter an OpenRouter API key in the model dialog or set `OPENROUTER_API_KEY` before starting Metri. A key entered in the dialog stays only in server memory until restart; it is not written to the trace. Sol uses the OpenAI API key or local Codex auth. Turn Auto-approve off first. Later bubbles are archived and removed from the active conversation. Raw shows the full returned JSON; Rendered shows reasoning when the provider includes it. The magnifier on a bubble searches only that message; Enter and Shift+Enter move through matches.
 
 Collapse messages is in the top-bar settings. Each bubble's caret stays visible; its other controls appear as you approach the bubble. The caret folds or expands just that bubble. Folding changes only the view, not the saved conversation. The browser remembers the collapse choices for each trace.
 
-The bookmark icon on a bubble adds or edits a labeled point on the scroll rail. Its label is saved with that trace.
+The bookmark icon on a bubble adds or edits a labeled point on the scroll rail. Its label is saved with that trace and stays with the numbered message slot if the bubble is removed; it reappears when that slot is filled again, as the next message version. The trash icon removes that bubble and later bubbles from the active view, while saving the full pre-delete trace in `data/archive/`.
 
 The left rail maps the full conversation. The one-pixel line is red for tool work, green for chat, and orange when a message mixes both; the dark segment shows the visible part. Click the rail to scroll, or click a dot or its label to jump to a named moment. An agent can add dots for each trace in `data/rails/<trace-id>.yml`, using [this example](examples/rail.yml). Hover over the rail to see all bookmark labels. The rail recalculates from the bubbles' actual heights as they expand or collapse.
 

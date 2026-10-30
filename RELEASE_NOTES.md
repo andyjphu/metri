@@ -1,3 +1,12 @@
+# Metri 2.2.0
+
+- Remove a message and all later messages from the active conversation with the bubble's trash control. Metri archives the full pre-removal trace and pauses automatic continuation so you can choose the next message.
+- Bookmarks stay with numbered message slots after removal. A replacement appears as the next version, such as `#11.2`, with the earlier version still available.
+- Create a new blue request from the message-version picker. The manual composer has a styled template selector and warns about unanswered tool calls without blocking the draft.
+- Rendered view shows a user message alongside tool results even when the user message precedes them in the request JSON. The rail has a compact color key, and error notices can be dismissed.
+
+Validation: `python3 -m unittest metri.test_server` (38 tests), `node --check app.js`, and `git diff --check`.
+
 # Metri 2.1.0
 
 This release covers the Metri changes since the last tagged stable build, `v1.3-stable`. There was no separate 2.0 tag.

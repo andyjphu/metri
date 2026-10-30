@@ -52,9 +52,11 @@
   let railFrame = null;
   let messageSearch = null;
   let messageMatches = [];
+  let dismissedNotice = null;
   const renderedEditors = new Set();
   const pencil = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4l11.1-11.1a2.1 2.1 0 0 0-3-3L5 17v3Z"/><path d="m14.7 7.3 3 3"/></svg>';
   const rewindIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 7-4 4 4 4"/><path d="M5 11h10a5 5 0 0 1 0 10h-2"/></svg>';
+  const deleteIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3m3 0-.8 13H6.8L6 7M10 10v7m4-7v7"/></svg>';
   const refreshIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.4 6.6"/><path d="M20 5v6h-6"/></svg>';
   const swapIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h16m-4-4 4 4-4 4M20 16H4m4-4-4 4 4 4"/></svg>';
   const searchIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.8" cy="10.8" r="6.3"/><path d="m16 16 4.2 4.2"/></svg>';
@@ -105,8 +107,8 @@
 
   function currentInputItems(input) {
     let start = input.length;
-    if (input[start - 1]?.role === "user") start--;
-    while (start > 0 && input[start - 1]?.type === "function_call_output") start--;
+    while (start > 0 && (input[start - 1]?.role === "user" ||
+      input[start - 1]?.type === "function_call_output")) start--;
     return input.slice(start);
   }
 
@@ -274,8 +276,9 @@
 
   function showNotice(message, error = false) {
     const el = $("#notice");
-    el.textContent = message;
-    el.hidden = !message;
+    if (!message) dismissedNotice = null;
+    $("#notice-content").textContent = message;
+    el.hidden = !message || dismissedNotice === message;
     el.classList.toggle("error", error);
   }
 
@@ -660,6 +663,17 @@
     $("#manual-add-message").disabled = parts.some((part) => part.dataset.kind === "message");
     $("#manual-add-tool").disabled = dialog.dataset.side === "gray" ? !context.tools.length :
       !context.calls.some((call) => !parts.some((part) => part.dataset.kind === "tool" && part.querySelector("select")?.value === call.call_id));
+    const warning = $("#manual-warning");
+    const answered = new Set(parts.filter((part) => part.dataset.kind === "tool")
+      .map((part) => part.querySelector("select")?.value));
+    const missing = dialog.dataset.side === "blue" ? context.calls.filter((call) => !answered.has(call.call_id)) : [];
+    warning.hidden = !missing.length;
+    if (missing.length) {
+      const counts = new Map();
+      for (const call of missing) counts.set(call.name, (counts.get(call.name) || 0) + 1);
+      const names = [...counts].map(([name, count]) => `${name}${count > 1 ? ` ×${count}` : ""}`).join(", ");
+      warning.textContent = `${missing.length} tool result${missing.length === 1 ? "" : "s"} missing (${names}). Sending this request will fail.`;
+    }
   }
 
   function addManualPart(kind) {
@@ -687,6 +701,27 @@
     part.querySelector("textarea").focus();
   }
 
+  function setManualTemplate(id, apply = false) {
+    const picker = $("#manual-template-picker");
+    const previous = templateOptions.find((item) => item.id === picker.dataset.selected);
+    const item = templateOptions.find((template) => template.id === id);
+    picker.dataset.selected = item?.id || "";
+    $("#manual-template-label").textContent = item?.title || "No template";
+    for (const option of $("#manual-template-menu").querySelectorAll("button"))
+      option.setAttribute("aria-checked", String(option.dataset.templateId === picker.dataset.selected));
+    $("#manual-template-menu").hidden = true;
+    $("#manual-template").setAttribute("aria-expanded", "false");
+    if (!apply) return;
+    let part = $("#manual-parts .manual-part[data-kind=message]");
+    if (item && !part) {
+      addManualPart("message");
+      part = $("#manual-parts .manual-part[data-kind=message]");
+    }
+    if (item) part.querySelector("textarea").value = item.message;
+    else if (part && part.querySelector("textarea").value === previous?.message)
+      part.querySelector("textarea").value = "";
+  }
+
   async function openManualComposer() {
     await finishEdits();
     const context = manualContext();
@@ -700,15 +735,25 @@
     $("#manual-submit").textContent = dialog.dataset.side === "gray" ? "Create response" : "Create draft";
     $("#manual-parts").replaceChildren();
     $("#manual-error").hidden = true;
-    const templateSelect = $("#manual-template");
-    templateSelect.hidden = dialog.dataset.side !== "blue";
-    templateSelect.replaceChildren(new Option("Template", ""));
+    const templatePicker = $("#manual-template-picker");
+    templatePicker.hidden = dialog.dataset.side !== "blue";
+    templateOptions = [];
+    $("#manual-template-menu").replaceChildren();
+    setManualTemplate("");
     if (dialog.dataset.side === "blue") {
       const response = await fetch("/api/templates", {cache: "no-store"});
       const catalog = await response.json();
       if (!response.ok) throw Error(catalog.error || "Could not load templates.");
       templateOptions = catalog.templates;
-      for (const item of templateOptions) templateSelect.add(new Option(item.title, item.id));
+      for (const item of [{id: "", title: "No template"}, ...templateOptions]) {
+        const option = document.createElement("button");
+        option.type = "button";
+        option.setAttribute("role", "menuitemradio");
+        option.dataset.templateId = item.id;
+        option.textContent = item.title;
+        $("#manual-template-menu").append(option);
+      }
+      setManualTemplate("");
     }
     updateManualButtons();
     dialog.showModal();
@@ -793,9 +838,11 @@
       const caret = `<button class="collapse" type="button" title="${collapsed ? "Expand" : "Collapse"} bubble" aria-label="${collapsed ? "Expand" : "Collapse"} bubble" aria-expanded="${!collapsed}" data-action="collapse">${collapseIcon}</button>`;
       const swappable = !blocked && !state.busy && !state.auto_mode;
       const swap = swappable ? button(swapIcon, "Message versions", "swap-model") : "";
+      const remove = !blocked && !state.busy && index > 0 ? button(deleteIcon,
+        index === entries.length - 1 ? "Delete this message" : "Delete this and later messages", "delete-from", "delete") : "";
       const find = button(searchIcon, "Find in this message", "search-message");
       const bookmark = button(bookmarkIcon, railPoints.some((point) => point.message === entry.id) ? "Edit bookmark" : "Add bookmark", "bookmark", railPoints.some((point) => point.message === entry.id) ? "bookmarked" : "");
-      const taps = `<div class="tapback"><div class="tapback-extra">${controls}${swap}${find}${bookmark}${pen}</div>${caret}</div>`;
+      const taps = `<div class="tapback"><div class="tapback-extra">${controls}${swap}${find}${bookmark}${pen}${remove}</div>${caret}</div>`;
       const searchBar = messageSearch?.id === entry.id ?
         `<div class="message-search"><input class="message-search-input" type="search" aria-label="Find in message ${messageNumber(entry, index)}" value="${escapeHtml(messageSearch.query)}" autocomplete="off"><span class="message-search-count"></span><button type="button" data-action="close-search" aria-label="Close message search">×</button></div>` : "";
       const editors = editing ? `<div class="render-editors">${editableParts(entry).map((part) =>
@@ -1048,10 +1095,14 @@
     } finally { saving.delete(id); updateSaveStatus(); }
   }
 
-  function confirmRewind(number, count) {
+  function confirmRewind(number, count, includeSelected = false) {
     const dialog = $("#rewind-dialog");
-    $("#rewind-title").textContent = `Return to ${messageNumber(state.entries[number - 1], number - 1)}?`;
-    $("#rewind-detail").textContent = `Delete ${count} later message${count === 1 ? "" : "s"}.`;
+    $("#rewind-title").textContent = includeSelected ?
+      `Delete ${messageNumber(state.entries[number - 1], number - 1)}?` :
+      `Return to ${messageNumber(state.entries[number - 1], number - 1)}?`;
+    $("#rewind-detail").textContent = includeSelected ?
+      `${count === 1 ? "Delete this message." : `Delete this and ${count - 1} later message${count === 2 ? "" : "s"}.`}${state.auto_mode || state.auto_generate ? " Auto will pause." : ""}` :
+      `Delete ${count} later message${count === 1 ? "" : "s"}.`;
     $("#rewind-confirm").textContent = count === 1 ? "Delete message" : "Delete messages";
     dialog.returnValue = "";
     return new Promise((resolve) => {
@@ -1188,7 +1239,8 @@
         dialog.dataset.side = gray ? "gray" : "blue";
         dialog.dataset.mode = "existing";
         $("#swap-title").textContent = "Message versions";
-        $("#swap-new").hidden = !gray;
+        $("#swap-new").hidden = !gray && state.entries[index].status === "stale";
+        $("#swap-new-label").textContent = gray ? "New response" : "New request";
         $("#swap-existing").hidden = false;
         $("#swap-generate").hidden = true;
         $("#swap-submit").textContent = "Use version";
@@ -1198,16 +1250,19 @@
         syncSwapKeyField();
         dialog.showModal();
         return;
-      } else if (name === "rewind") {
+      } else if (name === "rewind" || name === "delete-from") {
         await finishEdits();
         const index = state.entries.findIndex((entry) => entry.id === id);
-        if (index < 0 || index === state.entries.length - 1) return;
-        const count = state.entries.length - index - 1;
-        if (!await confirmRewind(index + 1, count)) return;
+        const deleting = name === "delete-from";
+        const keepIndex = deleting ? index - 1 : index;
+        if (keepIndex < 0 || keepIndex === state.entries.length - 1) return;
+        const count = state.entries.length - keepIndex - 1;
+        if (!await confirmRewind(index + 1, count, deleting)) return;
         timers.forEach(clearTimeout);
         timers.clear();
         await Promise.allSettled([...saving.values()]);
-        await api("/api/rewind", {id});
+        await api("/api/rewind", {id: state.entries[keepIndex].id,
+          ...(deleting ? {notify: false, choose_next: true} : {})});
         edits.clear();
         renderedEditors.clear();
         saveError = false;
@@ -1306,7 +1361,14 @@
   $("#swap-dialog").addEventListener("close", () => { $("#swap-key").value = ""; });
   $("#swap-options").addEventListener("change", syncSwapKeyField);
   $("#swap-new").addEventListener("click", () => {
-    $("#swap-dialog").dataset.mode = "generate";
+    const dialog = $("#swap-dialog");
+    if (dialog.dataset.side === "blue") {
+      const id = Number(dialog.dataset.id);
+      dialog.close();
+      action("edit", id);
+      return;
+    }
+    dialog.dataset.mode = "generate";
     $("#swap-title").textContent = "New response";
     $("#swap-existing").hidden = true;
     $("#swap-generate").hidden = false;
@@ -1362,15 +1424,20 @@
       error.hidden = false;
     } finally { submit.disabled = false; }
   });
-  $("#manual-template").addEventListener("change", (event) => {
-    const item = templateOptions.find((template) => template.id === event.target.value);
-    if (!item) return;
-    let part = $("#manual-parts .manual-part[data-kind=message]");
-    if (!part) {
-      addManualPart("message");
-      part = $("#manual-parts .manual-part[data-kind=message]");
+  $("#manual-template").addEventListener("click", () => {
+    const menu = $("#manual-template-menu");
+    menu.hidden = !menu.hidden;
+    $("#manual-template").setAttribute("aria-expanded", String(!menu.hidden));
+  });
+  $("#manual-template-menu").addEventListener("click", (event) => {
+    const option = event.target.closest("button[data-template-id]");
+    if (option) setManualTemplate(option.dataset.templateId, true);
+  });
+  $("#manual-dialog").addEventListener("click", (event) => {
+    if (!event.target.closest("#manual-template-picker")) {
+      $("#manual-template-menu").hidden = true;
+      $("#manual-template").setAttribute("aria-expanded", "false");
     }
-    part.querySelector("textarea").value = item.message;
   });
   $("#bookmark-cancel").addEventListener("click", () => $("#bookmark-dialog").close());
   $("#bookmark-remove").addEventListener("click", () => saveBookmark(true));
@@ -1384,7 +1451,7 @@
   $("#manual-parts").addEventListener("click", (event) => {
     if (!event.target.closest(".manual-remove")) return;
     const part = event.target.closest(".manual-part");
-    if (part.dataset.kind === "message") $("#manual-template").value = "";
+    if (part.dataset.kind === "message") setManualTemplate("");
     part.remove();
     updateManualButtons();
   });
@@ -1641,6 +1708,10 @@
     storeValue(viewModeKey, viewMode);
     syncViewMode();
     renderAtCurrentPosition();
+  });
+  $("#notice-dismiss").addEventListener("click", () => {
+    dismissedNotice = $("#notice-content").textContent;
+    $("#notice").hidden = true;
   });
   $("#stream").addEventListener("scroll", (event) => {
     if (event.target === $("#stream")) queueVisiblePreviews();

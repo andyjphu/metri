@@ -143,13 +143,16 @@ def default_request():
     return new_trace_request()
 
 
-def make_entry(state, side, value, status):
+def make_entry(state, side, value, status, version_kind="generated"):
     entry = {
         "id": state["next_id"], "side": side, "status": status,
         "current_text": dump(value), "revision": 0,
     }
     if side == "gray":
         entry["variant_key"] = uuid.uuid4().hex
+        if state.get("pending_response_versions"):
+            entry["versions"] = state.pop("pending_response_versions")
+            append_version(entry, entry["current_text"], version_kind)
     elif side == "blue" and state.get("pending_draft_versions"):
         entry["versions"] = state.pop("pending_draft_versions")
         append_version(entry, entry["current_text"], "generated")
@@ -1130,17 +1133,22 @@ def append_version(target, raw, kind):
     return key
 
 
-def replace_gray(state, trace_id, target, raw_response, event_kind, variant_key=None, **details):
-    ensure_versions(state, trace_id, target)
-    state.pop("pending_draft_versions", None)
-    target_id = target["id"]
-    archive = DATA / "archive" / f"swap-{trace_id}-{target_id}-{datetime.now(timezone.utc):%Y%m%dT%H%M%S%fZ}"
+def archive_state(state, name):
+    archive = DATA / "archive" / f"{name}-{datetime.now(timezone.utc):%Y%m%dT%H%M%S%fZ}"
     archive.mkdir(parents=True)
     archived = copy.deepcopy(state)
     archived["busy"] = None
     (archive / "session.json").write_text(dump(archived) + "\n")
     if EVENTS_FILE.exists():
         shutil.copy2(EVENTS_FILE, archive / "events.jsonl")
+    return archive
+
+
+def replace_gray(state, trace_id, target, raw_response, event_kind, variant_key=None, **details):
+    ensure_versions(state, trace_id, target)
+    state.pop("pending_draft_versions", None)
+    target_id = target["id"]
+    archive = archive_state(state, f"swap-{trace_id}-{target_id}")
     index = state["entries"].index(target)
     removed_ids = [entry["id"] for entry in state["entries"][index + 1:]]
     state["entries"] = state["entries"][:index + 1]
@@ -1706,9 +1714,10 @@ class Handler(BaseHTTPRequestHandler):
                     response = data.get("response")
                     validate_manual_response(response, request)
                     entry["status"] = "simulated"
-                    target = make_entry(state, "gray", response, "received")
-                    target["versions"] = []
-                    append_version(target, target["current_text"], "manual")
+                    target = make_entry(state, "gray", response, "received", "manual")
+                    if not target.get("versions"):
+                        target["versions"] = []
+                        append_version(target, target["current_text"], "manual")
                     state["draft_generation"] += 1
                     state["draft_pending"] = False
                     state["draft_error"] = None
@@ -1757,9 +1766,21 @@ class Handler(BaseHTTPRequestHandler):
                     idx = state["entries"].index(target)
                     if idx == len(state["entries"]) - 1:
                         raise ValueError("Choose an earlier bubble to return to.")
+                    choose_next = data.get("choose_next") is True
+                    next_entry = state["entries"][idx + 1]
+                    if choose_next:
+                        ensure_versions(state, load_traces()["active"], next_entry)
+                    archive = archive_state(state, f"rewind-{load_traces()['active']}-{target['id']}")
                     removed = [item["id"] for item in state["entries"][idx + 1:]]
                     state["entries"] = state["entries"][:idx + 1]
+                    if choose_next:
+                        state["auto_mode"] = False
+                        state["auto_generate"] = False
                     state.pop("pending_draft_versions", None)
+                    state.pop("pending_response_versions", None)
+                    if choose_next:
+                        key = "pending_draft_versions" if next_entry["side"] == "blue" else "pending_response_versions"
+                        state[key] = copy.deepcopy(next_entry["versions"])
                     compact_ids(state)
                     state["auditor_history"] = [item for item in state["auditor_history"]
                                                 if item["after_gray_id"] <= target["id"]]
@@ -1772,9 +1793,10 @@ class Handler(BaseHTTPRequestHandler):
                     state["draft_error"] = None
                     state["auditor_exchange"] = []
                     save_state(state)
-                    event("rewound", target_id=target["id"], removed_ids=removed)
+                    event("rewound", target_id=target["id"], removed_ids=removed,
+                          choose_next=choose_next, archive=str(archive.relative_to(DATA)))
                     self.send(200, {"ok": True})
-                    if target["side"] == "gray" and data.get("notify", True) is not False:
+                    if target["side"] == "gray" and not choose_next and data.get("notify", True) is not False:
                         queue_next_draft(state, "rewound to gray response")
                     return
                 if path in {"/api/codex-draft", "/api/manual-draft"}:

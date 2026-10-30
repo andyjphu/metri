@@ -1106,6 +1106,81 @@ class MetriTest(unittest.TestCase):
         self.assertEqual(error.exception.code, 400)
         error.exception.close()
 
+    def test_rewind_choose_next_leaves_manual_and_ai_choices_available(self):
+        opening = self.get()["entries"][0]
+        request = json.loads(opening["current_text"])
+        request["input"][0]["content"] = "Investigate"
+        self.post("approve", {"id": opening["id"], "text": json.dumps(request)})
+        gray = self.await_idle()["entries"][-1]
+        draft = copy.deepcopy(request)
+        draft["input"] += json.loads(gray["current_text"])["output"] + [
+            {"type": "function_call_output", "call_id": "call_1", "output": "reply"}
+        ]
+        removed_blue = self.post("manual-draft", {"request": draft})["entry"]
+        trace_id = self.get_traces()["active"]
+        self.post("rail-point", {"trace_id": trace_id, "message": 3,
+                                 "label": "Next request"})
+        with server.LOCK:
+            state = server.load_state()
+            state["auto_mode"] = True
+            state["auto_generate"] = True
+            server.save_state(state)
+        with mock.patch.object(server, "notify_codex") as notification:
+            self.post("rewind", {"id": gray["id"], "choose_next": True})
+            notification.assert_not_called()
+        state = self.get()
+        self.assertEqual([entry["id"] for entry in state["entries"]], [1, 2])
+        self.assertEqual(state["entries"][-1]["side"], "gray")
+        self.assertFalse(state["auto_mode"])
+        self.assertFalse(state["auto_generate"])
+        self.assertFalse(state["draft_pending"])
+        with urllib.request.urlopen(self.base + "/api/rail") as reply:
+            self.assertEqual(json.load(reply)["points"],
+                             [{"message": 3, "label": "Next request"}])
+        events = [json.loads(line) for line in server.EVENTS_FILE.read_text().splitlines()]
+        rewind = next(item for item in reversed(events) if item["kind"] == "rewound")
+        archive = server.DATA / rewind["archive"]
+        saved = json.loads((archive / "session.json").read_text())
+        self.assertEqual(len(saved["entries"]), 3)
+        self.assertEqual(json.loads(saved["entries"][-1]["current_text"]), draft)
+        self.assertTrue((archive / "events.jsonl").exists())
+        replacement = self.post("manual-draft", {"request": draft})["entry"]
+        self.assertEqual(replacement["id"], removed_blue["id"])
+        self.assertEqual(self.get()["version_numbers"]["3"], 2)
+        self.assertEqual([item["number"] for item in self.variants(3)], [1, 2])
+        with urllib.request.urlopen(self.base + "/api/rail") as reply:
+            self.assertEqual(json.load(reply)["points"],
+                             [{"message": 3, "label": "Next request"}])
+
+    def test_removed_gray_keeps_bookmark_and_returns_as_next_version(self):
+        self.post("auto-generate", {"enabled": False})
+        opening = self.get()["entries"][0]
+        request = json.loads(opening["current_text"])
+        request["input"][0]["content"] = "Investigate"
+        self.post("edit", {"id": 1, "text": json.dumps(request)})
+        first_gray = self.post("manual-response", {"id": 1, "response": {
+            "model": request["model"], "output": [{"type": "message", "role": "assistant",
+                "content": [{"type": "output_text", "text": "First"}]}]}})["entry"]
+        draft = copy.deepcopy(request)
+        draft["input"] += json.loads(first_gray["current_text"])["output"]
+        blue = self.post("manual-draft", {"request": draft})["entry"]
+        removed_gray = self.post("manual-response", {"id": blue["id"], "response": {
+            "model": request["model"], "output": [{"type": "message", "role": "assistant",
+                "content": [{"type": "output_text", "text": "Old reply"}]}]}})["entry"]
+        trace_id = self.get_traces()["active"]
+        self.post("rail-point", {"trace_id": trace_id, "message": 4,
+                                 "label": "Agent reply"})
+        self.post("rewind", {"id": blue["id"], "choose_next": True})
+        replacement = self.post("manual-response", {"id": blue["id"], "response": {
+            "model": request["model"], "output": [{"type": "message", "role": "assistant",
+                "content": [{"type": "output_text", "text": "New reply"}]}]}})["entry"]
+        self.assertEqual(replacement["id"], removed_gray["id"])
+        self.assertEqual(self.get()["version_numbers"]["4"], 2)
+        self.assertEqual([item["number"] for item in self.variants(4)], [1, 2])
+        with urllib.request.urlopen(self.base + "/api/rail") as reply:
+            self.assertEqual(json.load(reply)["points"],
+                             [{"message": 4, "label": "Agent reply"}])
+
 
 if __name__ == "__main__":
     unittest.main()
