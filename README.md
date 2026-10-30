@@ -20,9 +20,13 @@ Blue bubbles contain the full request JSON. Gray bubbles contain the full agent 
 
 Bubble labels include the selected version and the model slug from [models.yml](models.yml): `#98.4 · glm-5.3-high` means message 98, version 4. The version picker uses the same numbering. Below a blue message, + AI sends it to the evaluated model and + Manual opens a response composer. Below a gray response with Auto-generate off, + AI asks for a draft and + Manual opens a request composer. A manual blue message is accepted when created; it waits for your choice of gray response. Manual creation makes no evaluated-model call. The composer gets available tools and pending call IDs from the exact conversation JSON.
 
+In + Manual, choose a message from [templates.yml](templates.yml). It fills an editable user message. The neutral exit interview is available after a run is marked complete.
+
 On any gray bubble, ⇄ shows previously generated responses for that request, numbered by generation order. Choose one to restore it, or tap + to generate another using a model from [models.yml](models.yml). For GLM, enter an OpenRouter API key in the model dialog or set `OPENROUTER_API_KEY` before starting Metri. A key entered in the dialog stays only in server memory until restart; it is not written to the trace. Sol uses the OpenAI API key or local Codex auth. Turn Auto-approve off first. Later bubbles are archived and removed from the active conversation. Raw shows the full returned JSON; Rendered shows reasoning when the provider includes it. The magnifier on a bubble searches only that message; Enter and Shift+Enter move through matches.
 
 Collapse messages is in the top-bar settings. Each bubble's caret stays visible; its other controls appear as you approach the bubble. The caret folds or expands just that bubble. Folding changes only the view, not the saved conversation. The browser remembers the collapse choices for each trace.
+
+The bookmark icon on a bubble adds or edits a labeled point on the scroll rail. Its label is saved with that trace.
 
 The left rail maps the full conversation. The one-pixel line is red for tool work, green for chat, and orange when a message mixes both; the dark segment shows the visible part. Click the rail to scroll, or click a dot or its label to jump to a named moment. An agent can add dots for each trace in `data/rails/<trace-id>.yml`, using [this example](examples/rail.yml). Hover over the rail to see all bookmark labels. The rail recalculates from the bubbles' actual heights as they expand or collapse.
 

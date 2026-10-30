@@ -83,6 +83,7 @@
   <dialog id="manual-dialog" class="swap-dialog manual-dialog" aria-labelledby="manual-title">
     <form id="manual-form">
       <div id="manual-title" class="swap-title"></div>
+      <select id="manual-template" aria-label="Message template" hidden><option value="">Template</option></select>
       <div id="manual-parts" class="manual-parts"></div>
       <div class="manual-add">
         <button id="manual-add-message" type="button"></button>
@@ -90,6 +91,14 @@
       </div>
       <div id="manual-error" class="swap-error" role="alert" hidden></div>
       <div class="swap-actions"><button id="manual-cancel" type="button">Cancel</button><button id="manual-submit" type="submit">Create</button></div>
+    </form>
+  </dialog>
+  <dialog id="bookmark-dialog" class="swap-dialog bookmark-dialog" aria-labelledby="bookmark-title">
+    <form id="bookmark-form">
+      <div id="bookmark-title" class="swap-title">Bookmark</div>
+      <input id="bookmark-label" aria-label="Bookmark label" maxlength="80" autocomplete="off" spellcheck="false">
+      <div id="bookmark-error" class="swap-error" role="alert" hidden></div>
+      <div class="swap-actions"><button id="bookmark-remove" type="button" hidden>Remove</button><button id="bookmark-cancel" type="button">Cancel</button><button id="bookmark-save" type="submit">Save</button></div>
     </form>
   </dialog>
   <dialog id="rewind-dialog" class="swap-dialog rewind-dialog" aria-labelledby="rewind-title" aria-describedby="rewind-detail">

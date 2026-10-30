@@ -18,7 +18,7 @@ from metri import server
 class MetriTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
-        self.original = (server.DATA, server.STATE_FILE, server.EVENTS_FILE, server.MODELS_FILE,
+        self.original = (server.DATA, server.STATE_FILE, server.EVENTS_FILE, server.MODELS_FILE, server.TEMPLATES_FILE,
                          server.call_api, server.call_swap_model, server.CODEX_THREAD_ID, server.OPENROUTER_SESSION_KEY)
         server.DATA = Path(self.tmp.name)
         server.STATE_FILE = server.DATA / "session.json"
@@ -26,6 +26,8 @@ class MetriTest(unittest.TestCase):
         model_config = server.MODELS_FILE.read_text()
         server.MODELS_FILE = server.DATA / "models.yml"
         server.MODELS_FILE.write_text(model_config)
+        server.TEMPLATES_FILE = server.DATA / "templates.yml"
+        server.TEMPLATES_FILE.write_text((Path(__file__).parent / "templates.yml").read_text())
         server.CODEX_THREAD_ID = None
         server.OPENROUTER_SESSION_KEY = None
         (server.DATA / "EXPERIMENT_CARD.md").write_text(
@@ -57,7 +59,7 @@ class MetriTest(unittest.TestCase):
         self.http.shutdown()
         self.http.server_close()
         self.thread.join(timeout=2)
-        (server.DATA, server.STATE_FILE, server.EVENTS_FILE, server.MODELS_FILE,
+        (server.DATA, server.STATE_FILE, server.EVENTS_FILE, server.MODELS_FILE, server.TEMPLATES_FILE,
          server.call_api, server.call_swap_model, server.CODEX_THREAD_ID, server.OPENROUTER_SESSION_KEY) = self.original
         self.tmp.cleanup()
 
@@ -268,6 +270,53 @@ class MetriTest(unittest.TestCase):
         self.post("generate-response", {"id": next_entry["id"]})
         self.await_idle()
         self.assertEqual(len(self.target_requests), 1)
+
+    def test_template_message_can_be_used_in_manual_request_after_run_completion(self):
+        self.post("auto-generate", {"enabled": False})
+        first = json.loads(self.get()["entries"][0]["current_text"])
+        first["input"][0]["content"] = "Research the task"
+        self.post("approve", {"id": 1, "text": json.dumps(first)})
+        self.await_idle()
+        with urllib.request.urlopen(self.base + "/api/templates") as reply:
+            templates = json.load(reply)["templates"]
+        self.assertEqual(templates[0]["id"], "neutral-exit-interview")
+        self.assertEqual(templates[0]["message"].count("\n"), 8)
+        self.assertNotIn("description", templates[0])
+        self.post("complete-run", {})
+        edited_message = templates[0]["message"] + "\nOne final note, please."
+        previous = json.loads(self.get()["entries"][-2]["current_text"])
+        gray = json.loads(self.get()["entries"][-1]["current_text"])
+        request = dict(previous)
+        request["input"] = previous["input"] + gray["output"] + [
+            {"type": "function_call_output", "call_id": "call_1", "output": '{"error":"canceled"}'},
+            {"role": "user", "content": edited_message}]
+        result = self.post("manual-draft", {"request": request})
+        draft = result["entry"]
+        request = json.loads(draft["current_text"])
+        self.assertEqual(draft["status"], "approved")
+        self.assertFalse(self.get()["run_complete"])
+        self.assertEqual(request["input"][-2]["call_id"], "call_1")
+        self.assertEqual(request["input"][-1], {"role": "user", "content": edited_message})
+        self.assertEqual(len(self.target_requests), 1)
+        self.post("generate-response", {"id": draft["id"]})
+        self.await_idle()
+        self.assertEqual(len(self.target_requests), 2)
+        self.assertEqual(self.target_requests[-1]["input"][-1]["content"], edited_message)
+
+    def test_bookmark_saves_to_active_traces_rail_and_can_be_removed(self):
+        with urllib.request.urlopen(self.base + "/api/traces") as reply:
+            trace_id = json.load(reply)["active"]
+        saved = self.post("rail-point", {"trace_id": trace_id, "message": 1,
+                                         "label": "First decision"})
+        self.assertEqual(saved["points"], [{"message": 1, "label": "First decision"}])
+        with urllib.request.urlopen(self.base + "/api/rail") as reply:
+            self.assertEqual(json.load(reply)["points"], saved["points"])
+        updated = self.post("rail-point", {"trace_id": trace_id, "message": 1,
+                                           "label": "Initial task"})
+        self.assertEqual(updated["points"][0]["label"], "Initial task")
+        removed = self.post("rail-point", {"trace_id": trace_id, "message": 1,
+                                           "remove": True})
+        self.assertEqual(removed["points"], [])
 
     def test_manual_blue_can_receive_manual_gray_without_provider_call(self):
         self.post("auto-generate", {"enabled": False})

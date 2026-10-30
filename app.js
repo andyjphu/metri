@@ -36,6 +36,7 @@
   let traces = null;
   let modelCatalog = null;
   let swapModelOptions = [];
+  let templateOptions = [];
   let openrouterReady = false;
   let switchingTrace = false;
   let traceRenameId = null;
@@ -57,6 +58,7 @@
   const refreshIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.4 6.6"/><path d="M20 5v6h-6"/></svg>';
   const swapIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h16m-4-4 4 4-4 4M20 16H4m4-4-4 4 4 4"/></svg>';
   const searchIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.8" cy="10.8" r="6.3"/><path d="m16 16 4.2 4.2"/></svg>';
+  const bookmarkIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 4.5h12v16l-6-4-6 4z"/></svg>';
   const approveIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 4.5 4.5L19 7"/></svg>';
   const discardIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6 18 18M18 6 6 18"/></svg>';
   const collapseIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>';
@@ -688,7 +690,7 @@
   async function openManualComposer() {
     await finishEdits();
     const context = manualContext();
-    if (state.auto_mode || state.busy || state.run_complete) throw Error("Pause Auto before adding a manual message.");
+    if (state.auto_mode || state.busy) throw Error("Pause Auto before adding a manual message.");
     const dialog = $("#manual-dialog");
     dialog.dataset.side = context.last.side === "blue" ? "gray" : "blue";
     dialog.dataset.sourceId = context.last.id;
@@ -698,8 +700,45 @@
     $("#manual-submit").textContent = dialog.dataset.side === "gray" ? "Create response" : "Create draft";
     $("#manual-parts").replaceChildren();
     $("#manual-error").hidden = true;
+    const templateSelect = $("#manual-template");
+    templateSelect.hidden = dialog.dataset.side !== "blue";
+    templateSelect.replaceChildren(new Option("Template", ""));
+    if (dialog.dataset.side === "blue") {
+      const response = await fetch("/api/templates", {cache: "no-store"});
+      const catalog = await response.json();
+      if (!response.ok) throw Error(catalog.error || "Could not load templates.");
+      templateOptions = catalog.templates;
+      for (const item of templateOptions) templateSelect.add(new Option(item.title, item.id));
+    }
     updateManualButtons();
     dialog.showModal();
+  }
+
+  async function saveBookmark(remove = false) {
+    const dialog = $("#bookmark-dialog");
+    const error = $("#bookmark-error");
+    const message = Number(dialog.dataset.message);
+    error.hidden = true;
+    try {
+      if (dialog.dataset.traceId !== traces.active) throw Error("The trace changed. Reopen the bookmark.");
+      const result = await api("/api/rail-point", {
+        trace_id: traces.active, message, remove, label: $("#bookmark-label").value
+      });
+      railPoints = result.points;
+      railSignature = JSON.stringify(railPoints);
+      scheduleRailLayout();
+      const button = $(`#m-${message} [data-action=bookmark]`);
+      if (button) {
+        const active = railPoints.some((point) => point.message === message);
+        button.classList.toggle("bookmarked", active);
+        button.title = active ? "Edit bookmark" : "Add bookmark";
+        button.setAttribute("aria-label", button.title);
+      }
+      dialog.close();
+    } catch (failure) {
+      error.textContent = failure.message;
+      error.hidden = false;
+    }
   }
 
   function render() {
@@ -755,7 +794,8 @@
       const swappable = !blocked && !state.busy && !state.auto_mode;
       const swap = swappable ? button(swapIcon, "Message versions", "swap-model") : "";
       const find = button(searchIcon, "Find in this message", "search-message");
-      const taps = `<div class="tapback"><div class="tapback-extra">${controls}${swap}${find}${pen}</div>${caret}</div>`;
+      const bookmark = button(bookmarkIcon, railPoints.some((point) => point.message === entry.id) ? "Edit bookmark" : "Add bookmark", "bookmark", railPoints.some((point) => point.message === entry.id) ? "bookmarked" : "");
+      const taps = `<div class="tapback"><div class="tapback-extra">${controls}${swap}${find}${bookmark}${pen}</div>${caret}</div>`;
       const searchBar = messageSearch?.id === entry.id ?
         `<div class="message-search"><input class="message-search-input" type="search" aria-label="Find in message ${messageNumber(entry, index)}" value="${escapeHtml(messageSearch.query)}" autocomplete="off"><span class="message-search-count"></span><button type="button" data-action="close-search" aria-label="Close message search">×</button></div>` : "";
       const editors = editing ? `<div class="render-editors">${editableParts(entry).map((part) =>
@@ -774,7 +814,9 @@
         return `<article class="message auditor"><div class="message-head">Auditor question (not shown to any evaluated agents)${pendingAnswer ? " | Pending response from your agent" : ""}</div><div class="bubble"><div class="auditor-part">${escapeHtml(exchange.question)}</div>${exchange.answer == null ? "" : `<div class="auditor-answer"><div class="auditor-part-label">Answer to auditor</div><div class="auditor-part">${escapeHtml(exchange.answer)}</div></div>`}</div></article>`;
       }).join("");
       return message + auditor;
-    }).join("") + (state.busy?.kind === "swap" || state.run_complete ? "" : state.busy?.kind === "target" ?
+    }).join("") + (state.busy?.kind === "swap" ? "" : state.run_complete ?
+      last?.side === "gray" && !state.pending_edit ?
+        `<article class="message blue draft-add"><div class="add-options"><button type="button" data-action="manual-compose" aria-label="Create manual request">+ Manual</button></div></article>` : "" : state.busy?.kind === "target" ?
       `<article class="message gray pending"><div class="bubble"><span class="pending-text">Pending response from provider.</span></div></article>` :
       last?.side === "blue" && ["draft", "approved"].includes(last.status) && !state.pending_edit ?
         `<article class="message gray response-add"><div class="add-options"><button type="button" data-action="${last.status === "approved" ? "generate-response" : "approve"}" aria-label="Generate AI response">+ AI</button><button type="button" data-action="manual-compose" aria-label="Create manual response">+ Manual</button></div></article>` :
@@ -1106,6 +1148,17 @@
       } else if (name === "manual-compose") {
         await openManualComposer();
         return;
+      } else if (name === "bookmark") {
+        const dialog = $("#bookmark-dialog");
+        const point = railPoints.find((item) => item.message === id);
+        dialog.dataset.message = id;
+        dialog.dataset.traceId = traces.active;
+        $("#bookmark-label").value = point?.label || "";
+        $("#bookmark-remove").hidden = !point;
+        $("#bookmark-error").hidden = true;
+        dialog.showModal();
+        $("#bookmark-label").focus();
+        return;
       } else if (name === "swap-model") {
         await finishEdits();
         const index = state.entries.findIndex((entry) => entry.id === id);
@@ -1309,12 +1362,30 @@
       error.hidden = false;
     } finally { submit.disabled = false; }
   });
+  $("#manual-template").addEventListener("change", (event) => {
+    const item = templateOptions.find((template) => template.id === event.target.value);
+    if (!item) return;
+    let part = $("#manual-parts .manual-part[data-kind=message]");
+    if (!part) {
+      addManualPart("message");
+      part = $("#manual-parts .manual-part[data-kind=message]");
+    }
+    part.querySelector("textarea").value = item.message;
+  });
+  $("#bookmark-cancel").addEventListener("click", () => $("#bookmark-dialog").close());
+  $("#bookmark-remove").addEventListener("click", () => saveBookmark(true));
+  $("#bookmark-form").addEventListener("submit", (event) => {
+    event.preventDefault();
+    saveBookmark();
+  });
   $("#manual-cancel").addEventListener("click", () => $("#manual-dialog").close());
   $("#manual-add-message").addEventListener("click", () => addManualPart("message"));
   $("#manual-add-tool").addEventListener("click", () => addManualPart("tool"));
   $("#manual-parts").addEventListener("click", (event) => {
     if (!event.target.closest(".manual-remove")) return;
-    event.target.closest(".manual-part").remove();
+    const part = event.target.closest(".manual-part");
+    if (part.dataset.kind === "message") $("#manual-template").value = "";
+    part.remove();
     updateManualButtons();
   });
   $("#manual-parts").addEventListener("change", (event) => {

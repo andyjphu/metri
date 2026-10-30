@@ -29,6 +29,7 @@ API_URL = "https://api.openai.com/v1/responses"
 OPENROUTER_URL = "https://openrouter.ai/api/v1/responses"
 OPENROUTER_SESSION_KEY = None
 MODELS_FILE = HERE / "models.yml"
+TEMPLATES_FILE = HERE / "templates.yml"
 CODEX_THREAD_ID = os.environ.get("METRI_CODEX_THREAD_ID") or os.environ.get("CODEX_THREAD_ID")
 
 
@@ -384,6 +385,48 @@ def model_catalog():
     if source.get("default") not in seen:
         raise ValueError("models.yml default must name an available model.")
     return source
+
+
+def template_catalog():
+    source = yaml.safe_load(TEMPLATES_FILE.read_text())
+    templates = source.get("templates") if isinstance(source, dict) else None
+    if not isinstance(templates, list) or not templates or len(templates) > 30:
+        raise ValueError("templates.yml needs 1 to 30 templates.")
+    seen = set()
+    for item in templates:
+        if (not isinstance(item, dict)
+                or not isinstance(item.get("id"), str)
+                or not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,63}", item["id"])
+                or item["id"] in seen
+                or not isinstance(item.get("title"), str)
+                or not 1 <= len(item["title"].strip()) <= 80
+                or ("description" in item and (not isinstance(item["description"], str)
+                    or not 1 <= len(item["description"].strip()) <= 160))
+                or not isinstance(item.get("message"), str)
+                or not 1 <= len(item["message"].strip()) <= 20_000):
+            raise ValueError("Invalid or duplicate template in templates.yml.")
+        seen.add(item["id"])
+    return {"templates": templates}
+
+
+def rail_points(trace_id):
+    config = DATA / "rails" / f"{trace_id}.yml"
+    source = yaml.safe_load(config.read_text()) if config.is_file() else {}
+    if not isinstance(source, dict) or not isinstance(source.get("points", []), list):
+        raise ValueError("Rail YAML needs a points list.")
+    points = source.get("points", [])
+    if len(points) > 200 or any(
+        not isinstance(point, dict)
+        or not isinstance(point.get("message"), int)
+        or isinstance(point.get("message"), bool)
+        or point["message"] < 1
+        or not isinstance(point.get("label"), str)
+        or not 1 <= len(point["label"].strip()) <= 120
+        for point in points
+    ):
+        raise ValueError("Each rail point needs a positive message number and short label.")
+    return sorted(({"message": point["message"], "label": point["label"].strip()} for point in points),
+                  key=lambda point: point["message"])
 
 
 def configured_model_slug(value, catalog):
@@ -1160,6 +1203,12 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         path = urlparse(self.path).path
+        if path == "/api/templates":
+            try:
+                self.send(200, template_catalog())
+            except (OSError, yaml.YAMLError, ValueError) as exc:
+                self.send(500, {"error": f"Cannot load templates: {exc}"})
+            return
         if path == "/api/models":
             try:
                 with LOCK:
@@ -1176,26 +1225,8 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/rail":
             with LOCK:
                 trace_id = load_traces()["active"]
-                config = DATA / "rails" / f"{trace_id}.yml"
                 try:
-                    source = yaml.safe_load(config.read_text()) if config.is_file() else {}
-                    if not isinstance(source, dict) or not isinstance(source.get("points", []), list):
-                        raise ValueError("Rail YAML needs a points list.")
-                    points = source.get("points", [])
-                    if len(points) > 200 or any(
-                        not isinstance(point, dict)
-                        or not isinstance(point.get("message"), int)
-                        or isinstance(point.get("message"), bool)
-                        or point["message"] < 1
-                        or not isinstance(point.get("label"), str)
-                        or not 1 <= len(point["label"].strip()) <= 120
-                        for point in points
-                    ):
-                        raise ValueError("Each rail point needs a positive message number and short label.")
-                    self.send(200, {"points": sorted(
-                        ({"message": point["message"], "label": point["label"].strip()} for point in points),
-                        key=lambda point: point["message"]
-                    )})
+                    self.send(200, {"points": rail_points(trace_id)})
                 except (yaml.YAMLError, ValueError) as exc:
                     self.send(400, {"error": f"Invalid rail YAML: {exc}"})
             return
@@ -1252,6 +1283,35 @@ class Handler(BaseHTTPRequestHandler):
             path = urlparse(self.path).path
             with LOCK:
                 state = load_state()
+                if path == "/api/rail-point":
+                    trace_id = load_traces()["active"]
+                    if data.get("trace_id") != trace_id:
+                        raise ValueError("The trace changed. Reopen the bookmark.")
+                    message_id = data.get("message")
+                    if (not isinstance(message_id, int) or isinstance(message_id, bool)
+                            or not any(entry["id"] == message_id for entry in state["entries"])):
+                        raise ValueError("Choose a current message.")
+                    if not isinstance(data.get("remove", False), bool):
+                        raise ValueError("Invalid bookmark action.")
+                    points = rail_points(trace_id)
+                    points = [point for point in points if point["message"] != message_id]
+                    if not data.get("remove", False):
+                        label = data.get("label")
+                        if not isinstance(label, str) or not 1 <= len(label.strip()) <= 80:
+                            raise ValueError("Enter a bookmark label under 80 characters.")
+                        if len(points) >= 200:
+                            raise ValueError("The rail supports at most 200 bookmarks.")
+                        points.append({"message": message_id, "label": label.strip()})
+                        points.sort(key=lambda point: point["message"])
+                    config = DATA / "rails" / f"{trace_id}.yml"
+                    config.parent.mkdir(parents=True, exist_ok=True)
+                    temporary = config.with_suffix(".tmp")
+                    temporary.write_text(yaml.safe_dump({"points": points}, sort_keys=False, allow_unicode=True))
+                    temporary.replace(config)
+                    event("rail_point_removed" if data.get("remove", False) else "rail_point_saved",
+                          trace_id=trace_id, message_id=message_id)
+                    self.send(200, {"points": points})
+                    return
                 if path == "/api/default-model":
                     catalog = model_catalog()
                     option_id = data.get("id")
@@ -1718,7 +1778,7 @@ class Handler(BaseHTTPRequestHandler):
                         queue_next_draft(state, "rewound to gray response")
                     return
                 if path in {"/api/codex-draft", "/api/manual-draft"}:
-                    if path == "/api/manual-draft" and (state["auto_mode"] or state["busy"] or state["run_complete"]):
+                    if path == "/api/manual-draft" and (state["auto_mode"] or state["busy"]):
                         raise ValueError("Pause Auto and wait before creating a manual draft.")
                     target = state["entries"][-1]
                     if target["side"] != "gray":
@@ -1735,6 +1795,7 @@ class Handler(BaseHTTPRequestHandler):
                         ensure_versions(state, load_traces()["active"], draft)
                         active = next(item for item in draft["versions"] if item["id"] == draft["active_version"])
                         active["kind"] = "manual"
+                        state["run_complete"] = False
                     state["draft_generation"] += 1
                     state["draft_pending"] = False
                     state["draft_error"] = None

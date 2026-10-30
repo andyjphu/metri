@@ -152,13 +152,14 @@ mark.message-search-hit.current { outline: 2px solid #ff9500; }
 .bubble .render-editor textarea { height: min(28vh, 280px); min-height: 90px; padding: 8px; border: 1px solid currentColor; border-radius: 7px; background: #ffffff18; }
 .tapback { position: absolute; z-index: 2; top: -21px; right: 12px; display: flex; gap: 2px; padding: 3px; border: 1px solid #d5d5d9; border-radius: 24px; background: #fff; box-shadow: 0 2px 8px #0000000d; }
 .tapback-extra { display: flex; max-width: 0; opacity: 0; overflow: hidden; transition: max-width .2s ease, opacity .16s ease; }
-.message:hover .tapback-extra, .message:focus-within .tapback-extra, .message.pending-edit .tapback-extra { max-width: 170px; opacity: 1; }
+.message:hover .tapback-extra, .message:focus-within .tapback-extra, .message.pending-edit .tapback-extra { max-width: 220px; opacity: 1; }
 .tapback button { display: grid; place-items: center; width: 31px; height: 31px; border: 0; border-radius: 50%; background: transparent; color: #55555a; }
 .tapback button:hover { background: #eeeef2; }
 .tapback button svg { display: block; width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .tapback button.collapse svg { transition: transform .15s ease; }
 .message:not(.collapsed) .tapback button.collapse svg { transform: rotate(180deg); }
 .tapback button.approve { color: #218354; }
+.tapback button.bookmarked svg { fill: #ff9500; stroke: #ff9500; }
 .message.selected .bubble { outline: 2px solid #a8ceff; outline-offset: 3px; }
 .swap-dialog { width: min(390px, calc(100vw - 32px)); padding: 20px; border: 1px solid #d5d5d9; border-radius: 19px; background: #fff; color: var(--ink); box-shadow: 0 16px 48px #0003; }
 .swap-dialog::backdrop { background: #0002; }
@@ -167,6 +168,8 @@ mark.message-search-hit.current { outline: 2px solid #ff9500; }
 .trace-rename-dialog input:focus { outline: 2px solid #80b5fb; outline-offset: 1px; }
 .manual-dialog { width: min(560px, calc(100vw - 32px)); max-height: min(80vh, 760px); overflow: hidden; }
 .manual-dialog form { display: flex; flex-direction: column; max-height: calc(min(80vh, 760px) - 40px); }
+#manual-template { width: 100%; margin-top: 16px; padding: 9px 10px; border: 1px solid #d5d5d9; border-radius: 10px; background: #f8f8fa; color: var(--ink); font-size: 13px; }
+#manual-template[hidden] { display: none; }
 .manual-parts { display: grid; gap: 10px; min-height: 0; margin-top: 16px; overflow-y: auto; }
 .manual-part { padding: 12px; border: 1px solid #d5d5d9; border-radius: 12px; background: #f8f8fa; }
 .manual-part-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; font-size: 12px; }
@@ -178,6 +181,9 @@ mark.message-search-hit.current { outline: 2px solid #ff9500; }
 .manual-add button { flex: 1; padding: 9px 10px; border: 1px dashed #c8c8cf; border-radius: 10px; background: #fff; color: #55555a; font-size: 12px; }
 .manual-add button:hover:not(:disabled) { background: #f0f0f4; }
 .manual-add button:disabled { opacity: .45; cursor: default; }
+.bookmark-dialog { width: min(420px, calc(100vw - 32px)); }
+#bookmark-label { display: block; width: 100%; margin-top: 16px; padding: 9px 10px; border: 1px solid #d5d5d9; border-radius: 10px; background: #f8f8fa; color: var(--ink); font-size: 13px; }
+#bookmark-remove[hidden] { display: none; }
 .swap-title { font-size: 16px; font-weight: 600; }
 .swap-options { display: grid; gap: 8px; }
 #swap-variants { margin-top: 16px; }
@@ -207,7 +213,7 @@ mark.message-search-hit.current { outline: 2px solid #ff9500; }
 .rewind-dialog #rewind-detail { margin: 8px 0 18px; color: #66666b; font-size: 12px; }
 .rewind-dialog .swap-actions button.destructive { border-color: #e45b54; background: #e45b54; color: #fff; }
 .rewind-dialog .swap-actions button.destructive:hover { background: #d94e48; }
-@media (hover: none) { .tapback-extra { max-width: 170px; opacity: 1; } }
+@media (hover: none) { .tapback-extra { max-width: 220px; opacity: 1; } }
 @media (hover: none) { .trace-row-rename { opacity: 1; pointer-events: auto; } }
 @media (max-width: 900px) {
   .topbar { grid-template-columns: minmax(0, 1fr) auto; padding-top: 8px; padding-bottom: 8px; }
