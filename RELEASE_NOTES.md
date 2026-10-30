@@ -1,3 +1,10 @@
+# Metri 2.2.5
+
+- Show a blue pending bubble while generating the next outgoing request and a gray pending bubble while waiting for the evaluated agent's response. Green remains for an unanswered auditor question. Once the auditor answers, draft generation appears blue.
+- Keep the pending bubbles as temporary UI status; completed numbered blue and gray bubbles still show the exact request and response JSON.
+
+Validation: `python3 -m unittest metri.test_server`, `node --check app.js`, and `git diff --check`.
+
 # Metri 2.2.4
 
 - Remove the duplicate ✓ from an unedited blue draft. + AI sends it to the evaluated model; + Manual accepts it for a locally authored response. ✓ remains available to confirm a text edit.
