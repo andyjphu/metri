@@ -297,7 +297,8 @@
       elapsed < 3600 ? `${Math.floor(elapsed / 60)}min` :
       elapsed < 86400 ? `${Math.floor(elapsed / 3600)}h` :
       `${Math.floor(elapsed / 86400)}d`;
-    const status = state?.busy ? "Sending..." :
+    const status = state?.busy?.kind === "target" ? "Waiting for response..." :
+      state?.busy ? "Generating response..." :
       saveError ? "Save failed" :
       saving.size ? "Saving..." :
       state?.pending_edit ? "Edit pending" :
@@ -846,7 +847,7 @@
       const blocked = Boolean(state.pending_edit);
       const controls = pending ? `${button(approveIcon, "Confirm edit", "confirm-edit", "approve")}${button(discardIcon, "Discard edit", "discard-edit")}` : blocked ? "" :
         entry.side === "blue" && ["draft", "stale"].includes(entry.status) ?
-          `${entry.status === "draft" && !isManualVersion(entry) && !state.busy && sendingId !== entry.id ? button(approveIcon, "Approve and send", "approve", "approve") : ""}${index > 0 ? button(refreshIcon, "Refresh blue draft", "refresh-draft", "refresh-draft") : ""}` :
+          `${index > 0 ? button(refreshIcon, "Refresh blue draft", "refresh-draft", "refresh-draft") : ""}` :
           entry.side === "gray" ?
             `${index < entries.length - 1 ? button(rewindIcon, "Delete later messages and return here", "rewind") : ""}${button(refreshIcon, "Regenerate this response", "refresh-response", "refresh-response")}` :
           index < entries.length - 1 ? button(rewindIcon, "Delete later messages and return here", "rewind") : "";
@@ -878,7 +879,7 @@
           state.auditor_exchange?.at(-1)?.answer == null;
         const showingPending = entry.id === last?.id && exchangeIndex === auditorExchanges.length - 1 &&
           state.draft_source === "api" && !state.pending_edit && (state.draft_pending || auditorWaiting);
-        const pendingControls = `<hr class="auditor-divider" aria-hidden="true">${showingPending ? `<div class="auditor-pending"><span class="pending-text">${auditorWaiting ? "Pending response from your agent." : "Generating draft from API."}</span><div class="pending-actions"><button type="button" data-action="cancel-draft">Cancel</button><button type="button" data-action="force-api-draft">Force API response</button></div></div>` : ""}`;
+        const pendingControls = showingPending ? `<hr class="auditor-divider" aria-hidden="true"><div class="auditor-pending"><span class="pending-text">${auditorWaiting ? "Pending response from your agent." : "Generating draft from API."}</span><div class="pending-actions"><button type="button" data-action="cancel-draft">Cancel</button><button type="button" data-action="force-api-draft">Force API response</button></div></div>` : "";
         const auditorTaps = bubbleControls(auditorCollapsed, button(deleteIcon, "Remove auditor exchange", "delete-auditor", "delete"), "collapse-auditor");
         return `<article class="message auditor ${auditorCollapsed ? "collapsed" : ""}" id="a-${historyIndex}" data-auditor-index="${historyIndex}"><div class="message-head">Auditor question (not shown to any evaluated agents)${pendingAnswer ? " | Pending response from your agent" : ""}</div><div class="bubble">${auditorTaps}<div class="collapsed-preview">${escapeHtml(exchange.question)}</div><div class="expanded-content"><div class="auditor-part">${escapeHtml(exchange.question)}</div>${exchange.answer == null ? "" : `<div class="auditor-answer"><div class="auditor-part-label">${exchange.forced ? "Continued without auditor answer" : "Answer to auditor"}</div><div class="auditor-part">${escapeHtml(exchange.answer)}</div></div>`}${pendingControls}</div></div></article>`;
       }).join("");
@@ -886,7 +887,7 @@
     }).join("") + (state.busy?.kind === "swap" ? "" : state.run_complete ?
       last?.side === "gray" && !state.pending_edit ?
         `<article class="message blue draft-add"><div class="add-options"><button type="button" data-action="manual-compose" aria-label="Create manual request">+ Manual</button></div></article>` : "" : state.busy?.kind === "target" ?
-      `<article class="message auditor pending"><div class="message-head">Metri status (not shown to any evaluated agents)</div><div class="bubble"><span class="pending-text">Pending response from provider.</span></div></article>` :
+      "" :
       last?.side === "blue" && ["draft", "approved"].includes(last.status) && !state.pending_edit ?
         `<article class="message gray response-add"><div class="add-options"><button type="button" data-action="${last.status === "approved" ? "generate-response" : "approve"}" aria-label="Generate AI response">+ AI</button><button type="button" data-action="manual-compose" aria-label="Create manual response">+ Manual</button></div></article>` :
       last?.side === "gray" && !state.pending_edit ?

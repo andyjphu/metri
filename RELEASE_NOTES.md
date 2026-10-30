@@ -1,3 +1,11 @@
+# Metri 2.2.4
+
+- Remove the duplicate ✓ from an unedited blue draft. + AI sends it to the evaluated model; + Manual accepts it for a locally authored response. ✓ remains available to confirm a text edit.
+- Remove the green pending bubble shown during a target call. The top bar reports that the response is pending, and the completed gray bubble appears when it arrives.
+- Show the divider inside an auditor exchange only while its pending controls are visible.
+
+Validation: `python3 -m unittest metri.test_server`, `node --check app.js`, and `git diff --check`.
+
 # Metri 2.2.3
 
 - Green auditor exchanges now use the same hover controls as other bubbles, with a caret to collapse and a trash control to remove one exchange from the active view and future auditor context. Removal records the exchange in the event log; removing one during a pending draft cancels that draft and pauses automatic continuation.
