@@ -1,3 +1,11 @@
+# Metri 2.2.3
+
+- Green auditor exchanges now use the same hover controls as other bubbles, with a caret to collapse and a trash control to remove one exchange from the active view and future auditor context. Removal records the exchange in the event log; removing one during a pending draft cancels that draft and pauses automatic continuation.
+- Name the agent that starts and iterates a run the chaperone in setup instructions and the Metri skill. Substantive auditor changes belong to that agent.
+- Balance the settings panel's top and bottom padding.
+
+Validation: `python3 -m unittest metri.test_server`, `node --check app.js`, and `git diff --check`.
+
 # Metri 2.2.2
 
 - Show pending auditor work inside the green bubble, below a subtle rule, with Cancel and Force API response controls. Other UI-only pending statuses are green too, so blue and gray message content remains the evaluated agent's exact request and response JSON.

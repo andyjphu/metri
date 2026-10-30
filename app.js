@@ -81,7 +81,8 @@
       collapseAll = saved.all === true;
       if (Array.isArray(saved.overrides)) {
         for (const [id, collapsed] of saved.overrides) {
-          if (Number.isSafeInteger(id) && typeof collapsed === "boolean") collapseOverrides.set(id, collapsed);
+          if ((Number.isSafeInteger(id) || (typeof id === "string" && /^auditor:[a-z0-9-]+$/.test(id)))
+              && typeof collapsed === "boolean") collapseOverrides.set(id, collapsed);
         }
       }
     } catch { /* Ignore absent or invalid saved preferences. */ }
@@ -94,6 +95,13 @@
 
   function isCollapsed(entry) {
     return collapseOverrides.get(entry.id) ?? collapseAll;
+  }
+
+  function auditorCollapseKey(exchange, index) { return `auditor:${exchange.id || `legacy-${index}`}`; }
+
+  function bubbleControls(collapsed, extra, collapseAction = "collapse") {
+    const label = `${collapsed ? "Expand" : "Collapse"} bubble`;
+    return `<div class="tapback"><div class="tapback-extra">${extra}</div><button class="collapse" type="button" title="${label}" aria-label="${label}" aria-expanded="${!collapsed}" data-action="${collapseAction}">${collapseIcon}</button></div>`;
   }
 
   function label(entry) {
@@ -808,13 +816,17 @@
     const auditorByGray = new Map();
     const auditorWaiting = state.draft_source === "api" && state.auditor_exchange?.at(-1)?.answer == null &&
       state.auditor_exchange?.length > 0;
-    for (const exchange of state.auditor_history || []) {
+    for (const [historyIndex, exchange] of (state.auditor_history || []).entries()) {
       const items = auditorByGray.get(exchange.after_gray_id) || [];
-      items.push(exchange);
+      items.push({exchange, historyIndex});
       auditorByGray.set(exchange.after_gray_id, items);
     }
     for (const id of renderedEditors) if (!entries.some((entry) => entry.id === id)) renderedEditors.delete(id);
-    for (const id of collapseOverrides.keys()) if (!entries.some((entry) => entry.id === id)) collapseOverrides.delete(id);
+    const auditorKeys = new Set((state.auditor_history || []).map(auditorCollapseKey));
+    for (const id of collapseOverrides.keys()) {
+      if (typeof id === "number" && !entries.some((entry) => entry.id === id)) collapseOverrides.delete(id);
+      if (typeof id === "string" && !auditorKeys.has(id)) collapseOverrides.delete(id);
+    }
     for (const id of previewCache.keys()) if (!entries.some((entry) => entry.id === id)) previewCache.delete(id);
     if (messageSearch && !entries.some((entry) => entry.id === messageSearch.id)) messageSearch = null;
     showNotice(state.error || "", !!state.error);
@@ -840,14 +852,13 @@
           index < entries.length - 1 ? button(rewindIcon, "Delete later messages and return here", "rewind") : "";
       const pen = !blocked && !state.busy && (entry.side === "gray" || entry.status !== "stale") ?
         button(pencil, "Edit message", "edit", "edit") : "";
-      const caret = `<button class="collapse" type="button" title="${collapsed ? "Expand" : "Collapse"} bubble" aria-label="${collapsed ? "Expand" : "Collapse"} bubble" aria-expanded="${!collapsed}" data-action="collapse">${collapseIcon}</button>`;
       const swappable = !blocked && !state.busy && !state.auto_mode;
       const swap = swappable ? button(swapIcon, "Message versions", "swap-model") : "";
       const remove = !blocked && !state.busy && index > 0 ? button(deleteIcon,
         index === entries.length - 1 ? "Delete this message" : "Delete this and later messages", "delete-from", "delete") : "";
       const find = button(searchIcon, "Find in this message", "search-message");
       const bookmark = button(bookmarkIcon, railPoints.some((point) => point.message === entry.id) ? "Edit bookmark" : "Add bookmark", "bookmark", railPoints.some((point) => point.message === entry.id) ? "bookmarked" : "");
-      const taps = `<div class="tapback"><div class="tapback-extra">${controls}${swap}${find}${bookmark}${pen}${remove}</div>${caret}</div>`;
+      const taps = bubbleControls(collapsed, `${controls}${swap}${find}${bookmark}${pen}${remove}`);
       const searchBar = messageSearch?.id === entry.id ?
         `<div class="message-search"><input class="message-search-input" type="search" aria-label="Find in message ${messageNumber(entry, index)}" value="${escapeHtml(messageSearch.query)}" autocomplete="off"><span class="message-search-count"></span><button type="button" data-action="close-search" aria-label="Close message search">×</button></div>` : "";
       const editors = editing ? `<div class="render-editors">${editableParts(entry).map((part) =>
@@ -861,13 +872,15 @@
         <div class="bubble">${taps}${searchBar}<div class="collapsed-preview ${viewMode}">${escapeHtml(preview)}</div><div class="expanded-content">${viewMode === "raw" ? `<textarea class="raw-editor" spellcheck="false" aria-label="${escapeHtml(label(entry))} JSON" data-id="${entry.id}" ${editable ? "" : "readonly"}></textarea>` : `<div class="message-text ${viewMode}" data-id="${entry.id}"></div>${editors}`}</div></div>
       </article>`;
       const auditorExchanges = auditorByGray.get(entry.id) || [];
-      const auditor = auditorExchanges.map((exchange, exchangeIndex) => {
+      const auditor = auditorExchanges.map(({exchange, historyIndex}, exchangeIndex) => {
+        const auditorCollapsed = collapseOverrides.get(auditorCollapseKey(exchange, historyIndex)) ?? collapseAll;
         const pendingAnswer = exchange.answer == null && state.auditor_exchange?.at(-1)?.question === exchange.question &&
           state.auditor_exchange?.at(-1)?.answer == null;
         const showingPending = entry.id === last?.id && exchangeIndex === auditorExchanges.length - 1 &&
           state.draft_source === "api" && !state.pending_edit && (state.draft_pending || auditorWaiting);
         const pendingControls = `<hr class="auditor-divider" aria-hidden="true">${showingPending ? `<div class="auditor-pending"><span class="pending-text">${auditorWaiting ? "Pending response from your agent." : "Generating draft from API."}</span><div class="pending-actions"><button type="button" data-action="cancel-draft">Cancel</button><button type="button" data-action="force-api-draft">Force API response</button></div></div>` : ""}`;
-        return `<article class="message auditor"><div class="message-head">Auditor question (not shown to any evaluated agents)${pendingAnswer ? " | Pending response from your agent" : ""}</div><div class="bubble"><div class="auditor-part">${escapeHtml(exchange.question)}</div>${exchange.answer == null ? "" : `<div class="auditor-answer"><div class="auditor-part-label">${exchange.forced ? "Continued without auditor answer" : "Answer to auditor"}</div><div class="auditor-part">${escapeHtml(exchange.answer)}</div></div>`}${pendingControls}</div></article>`;
+        const auditorTaps = bubbleControls(auditorCollapsed, button(deleteIcon, "Remove auditor exchange", "delete-auditor", "delete"), "collapse-auditor");
+        return `<article class="message auditor ${auditorCollapsed ? "collapsed" : ""}" id="a-${historyIndex}" data-auditor-index="${historyIndex}"><div class="message-head">Auditor question (not shown to any evaluated agents)${pendingAnswer ? " | Pending response from your agent" : ""}</div><div class="bubble">${auditorTaps}<div class="collapsed-preview">${escapeHtml(exchange.question)}</div><div class="expanded-content"><div class="auditor-part">${escapeHtml(exchange.question)}</div>${exchange.answer == null ? "" : `<div class="auditor-answer"><div class="auditor-part-label">${exchange.forced ? "Continued without auditor answer" : "Answer to auditor"}</div><div class="auditor-part">${escapeHtml(exchange.answer)}</div></div>`}${pendingControls}</div></div></article>`;
       }).join("");
       return message + auditor;
     }).join("") + (state.busy?.kind === "swap" ? "" : state.run_complete ?
@@ -1042,15 +1055,19 @@
     queueVisiblePreviews();
   }
 
-  function keepMessageTop(id, update) {
+  function keepArticleTop(selector, update) {
     const scroller = $("#stream");
-    const article = $(`#m-${id}`);
+    const article = $(selector);
     const before = article?.getBoundingClientRect().top;
     update();
-    const after = $(`#m-${id}`)?.getBoundingClientRect().top;
+    const after = $(selector)?.getBoundingClientRect().top;
     if (before !== undefined && after !== undefined) scroller.scrollTop += after - before;
     queueVisiblePreviews();
   }
+
+  function keepMessageTop(id, update) { keepArticleTop(`#m-${id}`, update); }
+
+  function keepAuditorTop(index, update) { keepArticleTop(`#a-${index}`, update); }
 
   function renderAtCurrentPosition() {
     keepPosition(render);
@@ -1075,12 +1092,16 @@
   function setCollapsedDom(entry, collapsed) {
     const article = $(`#m-${entry.id}`);
     if (!article) return;
+    setCollapsedArticle(article, collapsed);
+    if (!collapsed) populateExpanded(entry);
+  }
+
+  function setCollapsedArticle(article, collapsed) {
     article.classList.toggle("collapsed", collapsed);
-    const caret = article.querySelector("[data-action=collapse]");
+    const caret = article.querySelector(".tapback [data-action^=collapse]");
     caret.title = `${collapsed ? "Expand" : "Collapse"} bubble`;
     caret.setAttribute("aria-label", caret.title);
     caret.setAttribute("aria-expanded", String(!collapsed));
-    if (!collapsed) populateExpanded(entry);
   }
 
   async function saveEdit(id) {
@@ -1118,11 +1139,32 @@
     });
   }
 
-  async function action(name, id) {
+  async function action(name, id, auditorIndex = null) {
     const last = state.entries.at(-1);
     if (["approve", "generate-response"].includes(name) && sendingId !== null) return;
     try {
-      if (name === "search-message") {
+      if (name === "collapse-auditor" && auditorIndex !== null) {
+        const exchange = state.auditor_history?.[auditorIndex];
+        if (!exchange) return;
+        const key = auditorCollapseKey(exchange, auditorIndex);
+        const collapsed = !(collapseOverrides.get(key) ?? collapseAll);
+        collapseOverrides.set(key, collapsed);
+        saveCollapsePreferences();
+        keepAuditorTop(auditorIndex, () => setCollapsedArticle($(`#a-${auditorIndex}`), collapsed));
+        return;
+      } else if (name === "delete-auditor" && auditorIndex !== null) {
+        const exchange = state.auditor_history?.[auditorIndex];
+        if (!exchange) return;
+        await api("/api/delete-auditor-exchange", {index: auditorIndex, after_gray_id: exchange.after_gray_id,
+          question: exchange.question});
+        collapseOverrides.delete(auditorCollapseKey(exchange, auditorIndex));
+        if (!exchange.id) for (const key of collapseOverrides.keys()) {
+          if (typeof key === "string" && key.startsWith("auditor:legacy-")) collapseOverrides.delete(key);
+        }
+        saveCollapsePreferences();
+        await refresh(true, true);
+        return;
+      } else if (name === "search-message") {
         if (messageSearch?.id === id) {
           messageSearch = null;
           messageMatches = [];
@@ -1370,7 +1412,9 @@
   document.addEventListener("click", (event) => {
     const btn = event.target.closest("[data-action]");
     if (!btn) return;
-    action(btn.dataset.action, Number(btn.closest(".message")?.dataset.id || state.entries.at(-1).id));
+    const article = btn.closest(".message");
+    action(btn.dataset.action, Number(article?.dataset.id || state.entries.at(-1).id),
+      article?.dataset.auditorIndex === undefined ? null : Number(article.dataset.auditorIndex));
   });
   $("#swap-cancel").addEventListener("click", () => $("#swap-dialog").close());
   $("#swap-dialog").addEventListener("close", () => { $("#swap-key").value = ""; });
@@ -1549,7 +1593,10 @@
       collapseAll = collapse;
       collapseOverrides.clear();
       saveCollapsePreferences();
-      keepPosition(() => state.entries.forEach((entry) => setCollapsedDom(entry, collapse)));
+      keepPosition(() => {
+        state.entries.forEach((entry) => setCollapsedDom(entry, collapse));
+        $("#messages").querySelectorAll("[data-auditor-index]").forEach((article) => setCollapsedArticle(article, collapse));
+      });
     } catch (error) {
       event.target.checked = collapseAll;
       showNotice(error.message, true);

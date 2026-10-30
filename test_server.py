@@ -964,6 +964,29 @@ class MetriTest(unittest.TestCase):
         error.exception.close()
         self.assertEqual(len(target_calls), 1)
 
+    def test_removing_green_exchange_clears_auditor_context_and_pending_draft(self):
+        state = self.get()
+        state["entries"].append(server.make_entry(state, "gray", {"output": []}, "complete"))
+        exchange = {"id": "auditor-one", "after_gray_id": state["entries"][-1]["id"],
+                    "question": "What does setup return?", "answer": None}
+        state["auditor_history"] = [copy.deepcopy(exchange)]
+        state["auditor_exchange"] = [{key: exchange[key] for key in ("id", "question", "answer")}]
+        state["draft_pending"] = True
+        state["auto_mode"] = True
+        state["auto_generate"] = True
+        server.save_state(state)
+
+        self.post("delete-auditor-exchange", {"index": 0, "after_gray_id": exchange["after_gray_id"],
+                                               "question": exchange["question"]})
+        current = self.get()
+        self.assertEqual(current["auditor_history"], [])
+        self.assertEqual(current["auditor_exchange"], [])
+        self.assertFalse(current["draft_pending"])
+        self.assertFalse(current["auto_mode"])
+        self.assertFalse(current["auto_generate"])
+        self.assertEqual([item["kind"] for item in map(json.loads, server.EVENTS_FILE.read_text().splitlines())][-1],
+                         "auditor_exchange_removed")
+
     def test_force_api_response_resolves_auditor_wait_without_target_call(self):
         target_calls = []
         drafter_calls = []

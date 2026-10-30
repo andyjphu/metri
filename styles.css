@@ -34,7 +34,7 @@ button { cursor: pointer; }
 .settings-button:hover, .settings-button[aria-expanded="true"] { background: #eeeef2; }
 .settings-button:focus-visible { outline: 2px solid #80b5fb; outline-offset: 2px; }
 .settings-button svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
-.settings-panel { position: absolute; z-index: 20; top: calc(100% + 10px); right: 0; width: 260px; max-height: min(520px, calc(100vh - 110px)); overflow-y: auto; padding: 8px 12px 18px; border: 1px solid #d5d5d9; border-radius: 16px; background: #fff; box-shadow: 0 12px 32px #0000001f; color: var(--ink); }
+.settings-panel { position: absolute; z-index: 20; top: calc(100% + 10px); right: 0; width: 260px; max-height: min(520px, calc(100vh - 110px)); overflow-y: auto; padding: 16px 12px; border: 1px solid #d5d5d9; border-radius: 16px; background: #fff; box-shadow: 0 12px 32px #0000001f; color: var(--ink); }
 .settings-panel[hidden] { display: none; }
 .settings-row { display: flex; justify-content: space-between; align-items: center; min-height: 42px; gap: 14px; font-size: 13px; color: var(--ink); }
 .settings-row[hidden] { display: none; }

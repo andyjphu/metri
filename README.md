@@ -1,6 +1,6 @@
 # Metri
 
-Current version: **2.2.2**. See [release notes](RELEASE_NOTES.md).
+Current version: **2.2.3**. See [release notes](RELEASE_NOTES.md).
 
 ![Metri conversation with message versions and the scroll rail](images/conversation-2.2.png)
 
@@ -40,7 +40,7 @@ The save indicator shows the time since the local session was saved, rounded to 
 
 Use Raw for editable JSON or Rendered for message text with line breaks and other whitespace displayed. Rendered shows each tool call and result in its own labeled section and leaves Markdown markers as text. Tap the pencil to edit message or tool fields in Rendered. The browser remembers the selected view and scroll position on reload. The old Cleaned view is hidden, retained in code for now, and considered for deprecation; it will receive no future updates.
 
-The first request has an empty task. Add one before approving it. In settings, Draft with API generates blue drafts through a model call; Agent queues this Codex session. With Auto-approve off, both leave sending behind ✓. If the API drafter lacks a tool result, it can ask the Codex auditor and resume after an answer. The green auditor bubble shows its pending state and offers Cancel or Force API response; the latter asks the API drafter to decide from the available environment facts. Green bubbles hold auditor-only questions and UI status; blue and gray message content comes from the evaluated agent's request and response JSON. An auditor exchange stays visible if its later blue draft is deleted. Set `METRI_DRAFT_MODEL` to choose the drafting model; otherwise the trace's model is used.
+The first request has an empty task. Add one before approving it. In settings, Draft with API generates blue drafts through a model call; Agent queues this Codex session. With Auto-approve off, both leave sending behind ✓. If the API drafter lacks a tool result, it can ask the Codex auditor and resume after an answer. The green auditor bubble shows its pending state and offers Cancel or Force API response; the latter asks the API drafter to decide from the available environment facts. Green bubbles hold auditor-only questions and UI status; blue and gray message content comes from the evaluated agent's request and response JSON. Green exchanges have a caret to collapse them and a trash control to remove them from the active view and future auditor context; the removal stays in the event log. The agent running the trace is its chaperone and handles substantive auditor changes. An auditor exchange stays visible if its later blue draft is deleted. Set `METRI_DRAFT_MODEL` to choose the drafting model; otherwise the trace's model is used.
 
 The server binds to `127.0.0.1`. It reads `OPENAI_API_KEY` from the environment or local Codex auth. The key stays out of the page and saved JSON. Edits and approvals are recorded in `data/events.jsonl`; the active trace is in `data/session.json`. Other traces are kept locally under `data/traces/`.
 

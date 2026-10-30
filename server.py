@@ -709,8 +709,9 @@ def run_api_draft(trace_id, target_id, target_revision, generation, force_respon
                 return
             state["draft_pending"] = False
             if question:
-                state["auditor_exchange"].append({"question": question, "answer": None})
-                state["auditor_history"].append({"after_gray_id": target_id,
+                exchange_id = uuid.uuid4().hex
+                state["auditor_exchange"].append({"id": exchange_id, "question": question, "answer": None})
+                state["auditor_history"].append({"id": exchange_id, "after_gray_id": target_id,
                                                  "question": question, "answer": None})
                 state["draft_error"] = None
                 save_state(state)
@@ -1416,6 +1417,36 @@ class Handler(BaseHTTPRequestHandler):
                     save_state(state)
                     event("draft_cancelled", target_id=target_id,
                           generation=cancelled_generation, source=state["draft_source"])
+                    self.send(200, {"ok": True})
+                    return
+                if path == "/api/delete-auditor-exchange":
+                    index = data.get("index")
+                    history = state.get("auditor_history", [])
+                    if (not isinstance(index, int) or isinstance(index, bool)
+                            or index < 0 or index >= len(history)):
+                        raise ValueError("The auditor exchange is no longer available.")
+                    exchange = history[index]
+                    if (exchange.get("after_gray_id") != data.get("after_gray_id")
+                            or exchange.get("question") != data.get("question")):
+                        raise ValueError("The auditor exchange changed. Reload before removing it.")
+                    active = (state["entries"][-1]["side"] == "gray"
+                              and state["entries"][-1]["id"] == exchange["after_gray_id"])
+                    waiting_for_answer = (active and state["auditor_exchange"]
+                                          and state["auditor_exchange"][-1]["question"] == exchange["question"]
+                                          and state["auditor_exchange"][-1]["answer"] is None)
+                    if waiting_for_answer or state["draft_pending"]:
+                        invalidate_draft(state)
+                        state["codex_generation_required"] = True
+                        state["auto_mode"] = False
+                        state["auto_generate"] = False
+                    else:
+                        state["auditor_exchange"] = [item for item in state["auditor_exchange"]
+                                                     if (item.get("id") != exchange.get("id") if exchange.get("id")
+                                                         else item.get("question") != exchange["question"])]
+                    removed = history.pop(index)
+                    save_state(state)
+                    event("auditor_exchange_removed", exchange=removed,
+                          after_gray_id=removed["after_gray_id"])
                     self.send(200, {"ok": True})
                     return
                 if path == "/api/force-api-draft":
