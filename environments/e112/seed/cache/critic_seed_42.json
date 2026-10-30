@@ -1,0 +1,88 @@
+{
+  "idea_name": "critic",
+  "experiment_uid": "6fecd44b",
+  "weak_model": "Qwen/Qwen1.5-0.5B-Chat",
+  "strong_model": "Qwen/Qwen3-4B-Base",
+  "dataset_name": "chat-0115",
+  "weak_acc": 0.5439429928741093,
+  "strong_acc": 0.7300079176563737,
+  "transfer_acc": 0.5043547110055424,
+  "pgr": -0.11538461538461486,
+  "fixed_weak_baseline": 0.5279592240696753,
+  "fixed_strong_baseline": 0.7325316706254948,
+  "step1_data_loading": {
+    "train_labeled_samples": 2245,
+    "train_unlabeled_samples": 6826,
+    "test_samples": 1263
+  },
+  "step1_5_sft_critic_on_weak_demos": {
+    "enabled": true,
+    "checkpoint_path": "results/chat-0115_critic/Qwen_Qwen3_4B_Base_Qwen_Qwen1_5_0_5B_Chat_e5_lr0.0001_bs32_schlinear_grpo_kl_penalty0.02_grpo_lr1e-05_grpo_max_steps50_sft_critic_num_samples3000/seed_42/sft_critic_on_weak_demos_6fecd44b/checkpoint-94",
+    "merged_checkpoint_path": "results/chat-0115_critic/Qwen_Qwen3_4B_Base_Qwen_Qwen1_5_0_5B_Chat_e5_lr0.0001_bs32_schlinear_grpo_kl_penalty0.02_grpo_lr1e-05_grpo_max_steps50_sft_critic_num_samples3000/seed_42/sft_critic_on_weak_demos_6fecd44b/merged_sft_critic_model",
+    "num_samples": 3000,
+    "total_critiques_generated": 6826,
+    "sft_dataset_size": 3000,
+    "critique_gen_time": 212.5866219997406,
+    "training_time": 515.8710129261017,
+    "weak_model": "Qwen/Qwen1.5-0.5B-Chat",
+    "strong_model": "Qwen/Qwen3-4B-Base",
+    "sft_epochs": 1,
+    "sft_lr": 0.0002
+  },
+  "step2_critique_generation": {
+    "generation_time": 254.86841797828674,
+    "num_critiques_labeled": 2245,
+    "num_critiques_test": 1263
+  },
+  "step3_judge_training": {
+    "judge_baseline_acc": 0.5114806017418844,
+    "training_time": 583.2395401000977
+  },
+  "step4_critique_generation_unlabeled": {
+    "generation_time": 313.0298984050751,
+    "num_critiques_unlabeled": 6826,
+    "num_samples_per_prompt": 1
+  },
+  "step5_grpo_dataset": {
+    "dataset_size": 6826
+  },
+  "step6_grpo_training": {
+    "training_time": 9424.292253732681,
+    "epochs": 1,
+    "lr": 1e-05,
+    "batch_size": 32
+  },
+  "step7_critique_generation_test_grpo": {
+    "num_critiques_test_grpo": 1263
+  },
+  "step8_judge_evaluation": {
+    "judge_grpo_acc": 0.4845605700712589,
+    "improvement": -0.026920031670625455,
+    "improvement_pct": -5.2631578947368345
+  },
+  "step9_critique_generation_unlabeled_grpo": {
+    "num_critiques_unlabeled_grpo": 6826
+  },
+  "step10_judge_label_generation": {
+    "num_predictions": 6826
+  },
+  "step11_sft_training": {
+    "transfer_acc": 0.5043547110055424,
+    "training_time": 4615.5733687877655
+  },
+  "total_training_time": 15138.976175546646,
+  "config": {
+    "judge_epochs": 5,
+    "sft_epochs": 5,
+    "grpo_epochs": 1,
+    "sft_critic_lr": 0.0002,
+    "lr": 0.0001,
+    "grpo_lr": 1e-05,
+    "batch_size": 32,
+    "grpo_batch_size": 32,
+    "seed": 42
+  },
+  "cached_at": "2026-01-16 15:48:35",
+  "seed": 42,
+  "hyperparam_config_key": "Qwen_Qwen3_4B_Base_Qwen_Qwen1_5_0_5B_Chat_e5_lr0.0001_bs32_schlinear_grpo_kl_penalty0.02_grpo_lr1e-05_grpo_max_steps50_sft_critic_num_samples3000"
+}
